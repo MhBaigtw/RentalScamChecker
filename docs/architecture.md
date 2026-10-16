@@ -39,6 +39,7 @@ browser ──HTTP──> apps/web (Next.js, :3100) ──server-side fetch─�
 | `signals/price_vs_market.py` | Rent vs CMHC average for the city and bedroom bucket; deterministic rule on public data, no network (M3, ED-021). |
 | `signals/address_sanity.py` | Geocodes the address and applies rules: not found / other city / non-residential (M3, ED-022). |
 | `reference_rents.py` | CMHC CSV loader (CLI) and `find_reference()` (municipality → CMA fallback) (M3). |
+| `metrics.py` | `GET /internal/metrics`: jobs by status, worker heartbeats (M3, ED-023). |
 | `geocoding.py` | `NominatimGeocoder`: identified User-Agent, DB cache, global 1 req/s limit via a locked `rate_limits` row (M3). External API (OpenStreetMap data). |
 
 The app factory takes a `Settings` object, so tests can build an app pointing at a deliberately

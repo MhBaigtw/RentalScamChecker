@@ -34,6 +34,7 @@ signal and aggregate jobs are enqueued in the same transaction as the check.
 | `listing_text` | yes | trimmed, 1 to 20 000 chars. Phone numbers and emails in it are extracted (linked like the contact fields) and replaced by `[phone]` / `[email]` before storing (ED-016) |
 | `monthly_rent` | yes | dollars; accepts `1850`, `1,850.00`, `$1850`; > 0, ≤ 20 000, ≤ 2 decimals; stored as cents |
 | `bedrooms` | yes | integer 0 to 10 (0 = studio) |
+| `unit_type` | no | `whole_unit` (default), `room` (a room in a shared place) or `basement`. Rooms aren't compared with CMHC prices (M3) |
 | `address_text` | yes | 3 to 300 chars |
 | `city` | yes | 2 to 100 chars |
 | `submitted_url` | no | `http(s)://` URL, ≤ 2000 chars. Stored as text, **never fetched** |
@@ -77,7 +78,20 @@ Photo bytes aren't served yet (the report UI in M7 decides whether it needs them
 
 `200 {"status": "ok", "database": "ok"}` or `503` `database_unavailable` (ED-008).
 
+## `GET /internal/metrics` (M3, ED-023)
+
+Operators only. With `INTERNAL_METRICS_TOKEN` set: `Authorization: Bearer <token>` required
+(401 `unauthorized` otherwise). Without it: open in development/test, `404` in production.
+
+```json
+{"jobs_by_status": {"queued": 0, "running": 0, "done": 12, "failed": 0, "dead": 0},
+ "workers_alive": 1, "abandoned_threads_alive": 0, "jobs_timed_out_total": 0,
+ "workers": [{"worker_id": "host:1234:ab12cd34", "alive": true, "last_seen_seconds_ago": 2.1,
+              "concurrency": 2, "jobs_done_total": 12, "jobs_failed_total": 0,
+              "jobs_timed_out_total": 0, "abandoned_threads_alive": 0, "...": "..."}]}
+```
+
 ## Not yet
 
 Rate limits and request-size limits (M8), `POST /checks/{id}/outcome` and `/dispute` (M8),
-`/internal/metrics` (later milestone), versioning (unversioned until there is a second client).
+versioning (unversioned until there is a second client).

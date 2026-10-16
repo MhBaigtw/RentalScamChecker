@@ -26,6 +26,7 @@ Standard library also does real work: `hmac` + `hashlib` for contact hashes (ED-
 | python-multipart | ~=0.0.32 | Required by FastAPI to parse `multipart/form-data` (`POST /checks`) (M1) |
 | pillow | ~=12.3.0 | Decode, validate and re-encode uploaded photos; bomb protection; also needed by imagehash in M5 (M1) |
 | phonenumbers | ~=9.0.41 | Port of Google's libphonenumber: parse and validate phone numbers, normalize to E.164 (M1) |
+| openpyxl | (script only, not an app dependency) | Reads CMHC's Excel data tables in `data/reference/cmhc/fetch_rms.py`; installed by hand when refreshing the dataset |
 | httpx | ~=0.28.1 | HTTP client for the Nominatim geocoder (timeouts, injectable transport for tests) and the CMHC fetch script. Was already a dev dependency (TestClient); runtime since M3 |
 
 Dev: pytest (tests), ruff (lint + format), mypy (strict type checks), pre-commit (git hooks).

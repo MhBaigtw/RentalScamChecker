@@ -329,44 +329,80 @@ should fill in "Code locations" once the code exists.
   serializes writes per check; checks have few signals.
 - Code locations: `apps/api/rentalscamchecker/pipeline.py` (`_record_result`)
 
-## ED-021: price_vs_market compares with the municipality's CMHC average, falling back to the CMA  (2026-10-16, M3)
+## ED-021: price_vs_market baseline: CMHC vacant-unit rent first, by municipality, with fallbacks  (2026-10-16, M3)
 - Problem / decision: which CMHC figure a listing's rent is compared with, and how the data gets
   into the database. Answers SPEC open question "Can CMHC zone boundaries be obtained?".
-- Findings: CMHC's Housing Market Information Portal (HMIP) publishes Rental Market Survey average
-  rents by bedroom type (studio, 1, 2, 3+) for CMAs, for RMS **zones**, and for **municipalities
-  (census subdivisions)**, each value with a reliability letter (a-d) or suppressed (`**`). In
-  the Toronto CMA, Oakville is its own zone; Mississauga and Brampton are split into 2-3 sub-zones.
-  Matching a listing to a sub-zone would need the zone boundary files; matching it to a
-  municipality only needs the city name. Latest survey: October 2025. The survey covers the
-  purpose-built rental market (row houses and apartments), not condos, basements or rooms.
-- Alternatives considered: CMA-level only (an Oakville listing compared with all of Toronto,
-  including downtown); zone level (needs boundaries plus point-in-polygon on a geocode, which
-  would make this signal depend on the geocoder); municipality level.
-- Chosen: municipality (CSD) level, falling back to the CMA when the municipal figure is
-  suppressed or rated `d` ("use with caution"). Skipped (status `skipped`, with a next step) when
-  the city isn't in the dataset. Bedrooms map to CMHC buckets (4+ → "3 bedroom +"). Severity:
-  `medium` from 30% below the reference, `high` from 50% below (`PRICE_*_BELOW_PERCENT`); never
-  flagged when above. The signal uses the city the user typed, normalized (`City of Oakville, ON`
-  → `oakville`; Toronto districts → `toronto`), and no network, so it stays independent of the
-  geocoder; address_sanity separately checks that the typed city matches the geocoded one.
-  Evidence: listing rent, reference rent, percent below, geography and level, CMA, survey month
-  and year, reliability, source URL, and CMHC's required "Adapted from ..." attribution. It
-  deliberately leaves out the thresholds (SPEC 10). The explanation states the survey's coverage
-  caveat. Data: `data/reference/cmhc/fetch_rms.py` writes a CSV with the source URL on every
-  row (suppressed values kept with empty rent, so the city → CMA link survives); the loader
-  `python -m rentalscamchecker.reference_rents <csv>` upserts it. The loader lives in the app
-  package so it is type-checked and tested.
-- Why: municipality figures match how users describe a listing (by city), are published with
-  reliability codes, and cover all three Sheridan campus cities with grade a/b data for 2-bedroom
-  units. Answer to the SPEC question: zone boundaries aren't needed for v1. Revisit zone level
-  only if municipal averages prove too coarse (large cities like Mississauga).
-- Trade-offs: the survey covers purpose-built rentals, while students often rent basements and
-  rooms, which can be legitimately cheaper (stated in the explanation; to be measured in the
-  evaluation). A typed city that's misspelled or not in the dataset means the price isn't checked.
-  The dataset is a snapshot that must be refreshed yearly (the October survey is published around
-  December).
+- Findings:
+  - CMHC publishes Rental Market Survey (RMS) averages by bedroom type (studio, 1, 2, 3+) per CMA,
+    per survey zone, and per municipality, each with a reliability letter (a-d) or suppressed (`**`).
+    The survey covers the purpose-built rental market (row and apartment units), not condos,
+    basements or rooms. Latest: October 2025.
+  - **The overall average understates what a new tenant pays.** It is dominated by long-tenure
+    sitting tenants. Humayun raised this before the dataset was committed. CMHC's old "Average
+    Apartment Rents (Vacant & Occupied Units)" product stopped at the 2020 edition, but the current
+    RMS data-table workbooks still publish the split: table 3.1.9 "Average Rents ($) of Vacant and
+    Occupied Units by Zone and Bedroom Type" (row and apartment). Its rows include whole
+    municipalities (e.g. "Mississauga City (Zones 18-20)", "Zone 23 - Oakville") and the CMA. Every
+    row we use carries CMHC's "Y" flag: vacant rents are statistically higher than occupied rents
+    (95% confidence).
+  - October 2025, 2-bedroom, row and apartment (vacant units from table 3.1.9; all units from
+    table 3.1.2, identical to the HMIP portal figures):
+
+    | | vacant units | all units | vacant vs all |
+    |---|---|---|---|
+    | Oakville | $2,621 (b) | $2,309 (b) | +13.5% |
+    | Mississauga | $2,473 (a) | $2,001 (a) | +23.6% |
+    | Brampton | $2,331 (a) | $2,025 (a) | +15.1% |
+    | Toronto CMA | $2,530 (a) | $2,045 (a) | +23.7% |
+
+    For comparison, the RMS report's Toronto 2-bedroom "turnover rent" (rent on a new lease; Rental
+    Market Report Fall 2025, p. 87) was
+    $2,547 in 2025, close to the vacant figure. Against the all-units baseline, a listing 30%
+    below would be 38-43% below the vacant baseline in these cities, so the old baseline would miss
+    exactly the listings this signal exists for.
+  - Coverage: vacant values are suppressed more often (32 of 120 values suppressed overall), but
+    every municipality in our list still gets a vacant baseline for every bedroom bucket, its own or
+    its CMA's (table in the M3 log). The vacant data is therefore usable, not too suppressed.
+- Alternatives considered: overall (all-units) average only, as first implemented; turnover rent
+  (published only per CMA and mostly for 2-bedroom in the report text, not as a per-municipality
+  table); zone level with boundary files (Mississauga and Brampton have 2-3 sub-zones; would need
+  point-in-polygon on a geocode, making the signal depend on the geocoder).
+- Chosen:
+  - Baseline order (Humayun's spec), first value with reliability a, b or c wins:
+    1. municipality, vacant units; 2. CMA, vacant units; 3. municipality, all units;
+    4. CMA, all units. Otherwise `skipped`. Reliability `d` is never used.
+  - Municipality level matched by the city the user typed (normalized: `City of Oakville, ON` →
+    `oakville`, Toronto districts → `toronto`), with no network, so the signal is independent of
+    the geocoder. address_sanity separately checks that the typed city matches the geocoded one.
+  - `unit_type` on the submission (`whole_unit` default, `room`, `basement`). Rooms are `skipped`
+    ("CMHC's rent data covers whole units only"); basements are compared, with a caveat in the
+    explanation that basements aren't in the survey and often rent for less.
+  - Severity: `medium` from 30% below the baseline, `high` from 50% below (`PRICE_*_BELOW_PERCENT`);
+    never flagged when above.
+  - Evidence: listing and reference rent, percent below, `rent_basis` (`vacant_units`/`all_units`),
+    a plain-language `baseline` ("average asking rent for vacant 2-bedroom units in Oakville"),
+    level, the CMHC row used (`cmhc_geography`), CMA, survey, reliability, source URL and CMHC's
+    required "Adapted from ..." attribution. Thresholds are deliberately left out (SPEC 10).
+  - Data: `data/reference/cmhc/fetch_rms.py` reads CMHC's official workbooks (Toronto and Hamilton
+    CMAs) and writes the CSV with provenance on every row (licence approved by Humayun; see
+    `data/reference/cmhc/README.md`). The loader `python -m rentalscamchecker.reference_rents <csv>`
+    upserts it. The loader lives in the app package so it is type-checked and tested.
+- Why: the vacant-unit average is CMHC's published figure closest to the price a new tenant is
+  asked, which is what a listing shows; municipality figures match how users describe a listing.
+  Answer to the SPEC question: zone boundaries aren't needed for v1.
+- Trade-offs and open issue:
+  - **Fallback order can overstate the baseline for small municipalities.** Where a municipality's
+    vacant value is suppressed, step 2 (CMA vacant) wins over step 3 (its own all-units value), even
+    when the CMA is much pricier. Milton/Halton Hills 2-bedroom: CMA vacant $2,530 vs the zone's own
+    all-units $1,667. A typical $1,700 Milton listing would be 33% below the baseline and flagged
+    `medium`. Markham and Caledon 2-bedroom are in the same situation. Raised with Humayun at the
+    end of M3; not changed without his decision.
+  - Purpose-built rentals only: basements and condos can legitimately differ (caveat in the text;
+    to be measured in the evaluation). A misspelled or unlisted city means no comparison. The
+    dataset must be refreshed yearly.
 - Code locations: `apps/api/rentalscamchecker/reference_rents.py`, `signals/price_vs_market.py`,
-  `data/reference/cmhc/fetch_rms.py`, migration `0005_reference_rents_geocoding`
+  `checks/validation.py` (`unit_type`), `data/reference/cmhc/fetch_rms.py`, migrations
+  `0005_reference_rents_geocoding` and `0006_check_unit_type`
 
 ## ED-022: Nominatim client: identified, cached, globally rate-limited through Postgres  (2026-10-16, M3)
 - Problem / decision: how address_sanity geocodes while following the Nominatim usage policy
@@ -380,11 +416,11 @@ should fill in "Code locations" once the code exists.
     enabled without a valid one.
   - Cache table `geocode_cache` keyed by the normalized query; "not found" is cached too.
   - Rate limit: a `rate_limits` row per service. A caller locks it (`SELECT ... FOR UPDATE`, with a
-    20 s `lock_timeout`), sleeps until `NOMINATIM_MIN_INTERVAL_SECONDS` (≥ 1, validated) has
+    `GEOCODER_LOCK_WAIT_SECONDS` (15 s) `lock_timeout`), sleeps until `NOMINATIM_MIN_INTERVAL_SECONDS` (≥ 1, validated) has
     passed since the last request, makes the HTTP call **while holding the lock**, then records the
     time. All our requests are serialized across every thread and process.
   - Query: `"<address>, <city>, Canada"`, `countrycodes=ca`, `format=jsonv2`, `addressdetails=1`,
-    `limit=1`; 10 s HTTP timeout. HTTP errors and network errors raise `GeocodingUnavailable`, and
+    `limit=1`; HTTP timeouts 5 s connect and 10 s per read. HTTP errors and network errors raise `GeocodingUnavailable`, and
     the job is retried with backoff. Errors are not cached.
   - Attribution "© OpenStreetMap contributors (data under the ODbL)" is in every address_sanity
     result's evidence for the UI to show.
@@ -396,9 +432,43 @@ should fill in "Code locations" once the code exists.
   correct across processes and is tested with three geocoders racing.
 - Trade-offs: holding the row lock during the HTTP call means queued geocodes wait in line, so
   each costs about 1 s plus latency; fine at our volume. Many concurrent checks would back up
-  (lock timeout 20 s → the job fails and retries). The geocoded point isn't yet written to the
+  (after the 15 s lock wait the job fails and retries). The geocoded point isn't yet written to the
   `checks.geocoded_*` columns; it's in the result evidence, and the M6 graph will decide where it
   lives. OSM's coverage of house numbers in new subdivisions is incomplete, which is why not-found
   is only `low`.
 - Code locations: `apps/api/rentalscamchecker/geocoding.py`, `signals/address_sanity.py`,
   `signals/registry.py`, migration `0005_reference_rents_geocoding`
+
+## ED-023: Abandoned threads: the slot is freed, each external call has its own timeout budget, and workers report counters  (2026-10-16, M3)
+- Problem / decision: after a per-job timeout (ED-017), what still holds resources, how to stop
+  external calls from outliving the job, and how operators can see it.
+- Findings (tested): a timed-out attempt does **not** keep its worker slot. The worker thread stops
+  waiting at the timeout, records a retryable failure and claims the next job. With one slot and a
+  job that overruns for 3 s, the next job finished within 2.5 s while the first one's helper thread
+  was still running (`test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running`).
+  What stays busy is the **helper thread**, plus any DB connection it holds, until its code returns.
+- Chosen:
+  - **Timeout budget per external call**, validated at startup in `Settings`: every client's worst
+    case must be below `JOB_TIMEOUT_SECONDS`, so a slow service fails the attempt by itself instead
+    of leaving an abandoned thread. Nominatim: lock wait 15 + rate-limit interval 1 + connect 5 +
+    read 10 = 31 s < 45 s. The Anthropic client in M4 must be added to the same validator.
+    Caveat: httpx timeouts apply per phase (connect, and each read or write), not to the whole
+    request, so a server trickling bytes could in theory exceed the sum; the job timeout remains
+    the backstop.
+  - **Counters**: each worker counts jobs done, failed and timed out, and abandoned helper threads
+    still alive. `job_timed_out` log lines carry `abandoned_threads_alive` and
+    `jobs_timed_out_total`. Every `WORKER_HEARTBEAT_INTERVAL_SECONDS` (5 s) each worker process
+    upserts its row in `worker_heartbeats`, and marks `stopped_at` on a clean exit.
+  - **`GET /internal/metrics`** (API) returns jobs by status, workers alive (heartbeat < 30 s old
+    and not stopped), total abandoned threads alive, timeouts, and per-worker rows. Access: with
+    `INTERNAL_METRICS_TOKEN` set, a matching `Authorization: Bearer` header is required (constant
+    time compare); without it, the endpoint is open in development/test and returns 404 in
+    production.
+- Alternatives considered: a separate metrics HTTP server inside each worker (a second port per
+  process, and the API couldn't aggregate); Prometheus format (no consumer yet; JSON is enough
+  until M9 picks a host and its monitoring).
+- Trade-offs: counters are per process lifetime and reset on restart; old heartbeat rows stay
+  (stopped workers are reported with `stopped_at`), and pruning them is left for M9. The metrics
+  query is three small queries; it isn't cached.
+- Code locations: `apps/api/rentalscamchecker/jobs/worker.py` (`WorkerStats`, `write_heartbeat`),
+  `metrics.py`, `config.py` (`_external_calls_fit_in_job_timeout`), migration `0007_worker_heartbeats`
