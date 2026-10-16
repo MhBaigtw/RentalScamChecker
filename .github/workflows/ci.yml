@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -28,6 +29,7 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg://rsc:rsc_ci_password@localhost:5432/rentalscamchecker
       ENVIRONMENT: test
+      CONTACT_HASH_PEPPER: ci-only-pepper-not-a-secret-0123456789abcdef
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,6 +49,8 @@ jobs:
           c = e.connect();
           print(c.execute(sa.text(\"SELECT default_version FROM pg_available_extensions WHERE name='vector'\")).scalar_one())"
       - run: alembic upgrade head
+      # Fails if the models and the migrations have drifted apart.
+      - run: alembic check
       - run: pytest -v
 
   web:

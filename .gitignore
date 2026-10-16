@@ -33,3 +33,6 @@ storage/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local photo storage (PHOTO_STORAGE_DIR)
+/var/

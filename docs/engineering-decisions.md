@@ -57,7 +57,7 @@ should fill in "Code locations" once the code exists.
   reversible by brute force (small search space), while HMAC requires the secret.
 - Trade-offs: pepper rotation requires rehashing or a dual-key period; raw values can't be shown
   back to users later.
-- Code locations: TBD
+- Code locations: `apps/api/rentalscamchecker/contacts.py`, `checks/service.py` (M1)
 
 ## ED-005: Rules first, trained model only with real labels  (2026-10-15, pre-M0)
 - Problem / decision: how risk is scored.
@@ -123,3 +123,69 @@ should fill in "Code locations" once the code exists.
   match the runtime.
 - Trade-offs: none significant for a project that controls its own runtime.
 - Code locations: `apps/web/package.json`, `.github/workflows/ci.yml`
+
+## ED-011: M1 schema scope: tables now, columns and indexes when their consumer exists  (2026-10-16, M1)
+- Problem / decision: TASKS M1 says "the SPEC data model (except users/outcomes/disputes)", but
+  later milestones own pieces of it (M2 the jobs queue, M5 embeddings, M6 graph indexes).
+- Alternatives considered: create only the tables M1 itself uses; create everything including
+  a guessed `vector(512)` column and all indexes.
+- Chosen: create every SPEC table except users/outcomes/disputes in `0002_domain_model`. Defer
+  `check_photos.embedding` to M5, because the vector dimension depends on the model M5 picks.
+  Defer indexes for queries that don't exist yet (job claim, contact-hash lookup, photo similarity)
+  to the milestone that writes the query, where `EXPLAIN` can justify them.
+- Why: matches the M1 wording; an index or column added before its query exists is a guess, and
+  the M6 task explicitly asks for indexes justified by EXPLAIN.
+- Trade-offs: more migrations later (one each in M2, M5, M6), which is normal.
+- Code locations: `apps/api/rentalscamchecker/models.py`, `apps/api/alembic/versions/0002_domain_model.py`
+
+## ED-012: TEXT + CHECK constraints instead of Postgres ENUM types  (2026-10-16, M1)
+- Problem / decision: how to store statuses, severities, contact kinds, risk levels.
+- Alternatives considered: Postgres `CREATE TYPE ... AS ENUM`; lookup tables with FKs.
+- Chosen: `TEXT` columns with named `CHECK (col IN (...))` constraints; allowed values defined
+  once as tuples in `models.py`.
+- Why: adding a value is dropping and re-adding one constraint in a migration, in a transaction.
+  `ALTER TYPE ... ADD VALUE` has transaction restrictions, and removing a value is not supported.
+  Values are readable in raw SQL without casts.
+- Trade-offs: a few bytes more per row than an enum's 4 bytes; nothing enforces that the Python
+  tuples and the constraints stay in sync except `alembic check` in CI.
+- Code locations: `apps/api/rentalscamchecker/models.py`
+
+## ED-013: Photos are re-encoded to metadata-free JPEG, with limits checked before decoding  (2026-10-16, M1)
+- Problem / decision: how to accept untrusted images safely (SPEC 7 and 10).
+- Alternatives considered: store the original bytes and strip EXIF with a metadata tool; keep the
+  original format (PNG/WebP) when re-encoding.
+- Chosen: allow JPEG/PNG/WebP; reject > 10 MB before decoding; read the header and reject either
+  side > 8000 px or > 40 MP before decoding pixels; also lower Pillow's own bomb guard
+  (`Image.MAX_IMAGE_PIXELS`) to 40 MP and turn its warning into an error. Then apply the EXIF
+  rotation, convert to RGB and save as JPEG quality 90 with no EXIF/ICC.
+- Why: re-encoding strips metadata (GPS, device) by construction rather than by a list of
+  tags to remove; it proves the file decodes; one stored format keeps M5's hashing uniform.
+  Checking the header first means a tiny "decompression bomb" PNG never allocates its pixels.
+- Trade-offs: re-encoding costs some quality and CPU per photo (not measured yet; the M9
+  load test should); transparency is
+  flattened; HEIC (iPhone default) isn't supported. Most phones convert to JPEG on upload,
+  but this may need a plugin later. Lowering `MAX_IMAGE_PIXELS` is process-global.
+- Code locations: `apps/api/rentalscamchecker/images.py`
+
+## ED-014: Contacts hashed during the request; validation reports all errors at once  (2026-10-16, M1)
+- Problem / decision: where normalization/hashing happens, and how invalid input is reported.
+- Chosen: `POST /checks` normalizes (phone → E.164 via `phonenumbers`, default region CA; email →
+  trimmed + lowercased) and HMACs `"<kind>:<value>"` before anything is written. Validation is a
+  pure function that checks every field and collects all errors. Photo errors join the same list
+  (`photos.N`), returned as one `validation_error`.
+- Alternatives considered: hash in a background job (SPEC wording allows it, but the raw value
+  would then sit in the `jobs` payload); stop at the first invalid field.
+- Why: raw contacts never touch the database or the job queue. Reporting every field lets the
+  form show all problems in one round trip. The `kind:` prefix keeps the phone and email
+  namespaces apart.
+- Trade-offs: an invalid-looking phone number blocks the submission (the user must fix or clear
+  it). Lowercasing the email local part is not strictly RFC-correct (see `contacts.py`).
+- Code locations: `apps/api/rentalscamchecker/checks/validation.py`, `contacts.py`, `checks/service.py`
+
+## ED-015: CI push trigger limited to main  (2026-10-16, M1)
+- Problem / decision: every push to a PR branch ran CI twice (push + pull_request events).
+- Chosen: `on.push.branches: [main]`, keep `pull_request`.
+- Why: PR branches are covered by `pull_request`; `main` still gets a run after each merge.
+- Trade-offs: a branch pushed without a PR gets no CI. That's acceptable with the
+  one-PR-per-milestone workflow.
+- Code locations: `.github/workflows/ci.yml`

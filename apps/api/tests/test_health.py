@@ -1,11 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from rentalscamchecker.config import Settings, get_settings
 from rentalscamchecker.main import create_app, error_body
-
-# Port 1 on localhost: nothing listens there, so connecting is refused immediately.
-UNREACHABLE_DB_URL = "postgresql+psycopg://nobody:nopass@127.0.0.1:1/nodb"
+from tests.helpers import UNREACHABLE_DB_URL, make_settings
 
 
 def test_error_body_has_the_documented_shape() -> None:
@@ -16,7 +13,7 @@ def test_error_body_has_the_documented_shape() -> None:
 
 @pytest.mark.integration
 def test_health_ok_when_database_is_up() -> None:
-    client = TestClient(create_app(get_settings()))
+    client = TestClient(create_app(make_settings()))
 
     response = client.get("/health")
 
@@ -25,7 +22,7 @@ def test_health_ok_when_database_is_up() -> None:
 
 
 def test_health_returns_503_with_error_shape_when_database_is_down() -> None:
-    settings = Settings(database_url=UNREACHABLE_DB_URL, database_connect_timeout=1)
+    settings = make_settings(UNREACHABLE_DB_URL, database_connect_timeout=1)
     client = TestClient(create_app(settings))
 
     response = client.get("/health")
@@ -41,7 +38,7 @@ def test_health_returns_503_with_error_shape_when_database_is_down() -> None:
 
 
 def test_request_id_is_echoed_back() -> None:
-    settings = Settings(database_url=UNREACHABLE_DB_URL, database_connect_timeout=1)
+    settings = make_settings(UNREACHABLE_DB_URL, database_connect_timeout=1)
     client = TestClient(create_app(settings))
 
     response = client.get("/health", headers={"X-Request-ID": "test-123"})

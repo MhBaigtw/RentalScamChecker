@@ -12,6 +12,8 @@ One line of "why" per dependency (CLAUDE.md rule). Versions are what M0 installe
 
 ## API (`apps/api`, Python 3.12)
 
+Standard library also does real work: `hmac` + `hashlib` for contact hashes (ED-004).
+
 | Package | Pin | Why |
 |---|---|---|
 | fastapi | ~=0.143.2 | Typed HTTP framework with validation and OpenAPI out of the box |
@@ -21,6 +23,9 @@ One line of "why" per dependency (CLAUDE.md rule). Versions are what M0 installe
 | alembic | ~=1.20.0 | Schema migrations for SQLAlchemy |
 | pydantic-settings | ~=2.16.0 | Typed settings from env vars / `.env` |
 | structlog | ~=26.1.0 | Structured JSON logs with context vars (request id / job id) |
+| python-multipart | ~=0.0.32 | Required by FastAPI to parse `multipart/form-data` (`POST /checks`) (M1) |
+| pillow | ~=12.3.0 | Decode, validate and re-encode uploaded photos; bomb protection; also needed by imagehash in M5 (M1) |
+| phonenumbers | ~=9.0.41 | Port of Google's libphonenumber: parse and validate phone numbers, normalize to E.164 (M1) |
 
 Dev: pytest (tests), httpx (FastAPI TestClient transport), ruff (lint + format), mypy (strict
 type checks), pre-commit (git hooks).
