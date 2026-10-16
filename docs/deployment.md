@@ -24,6 +24,19 @@ Environment checked in M0 on Humayun's machine: Windows 11, Docker Desktop 29.2.
 v5.1.0 (WSL 2 backend, ~3.5 GiB VM memory), Python 3.12.6 via `py -3.12`, Node 24.14.1,
 Git 2.55.0, about 26 GB free on C:.
 
+Docker Desktop doesn't necessarily start with Windows. If `docker version` reports it can't
+connect to `dockerDesktopLinuxEngine`, start Docker Desktop and wait for the daemon (seen at the
+start of M1; the container and its data were intact afterwards).
+
+## Secrets and local files (M1)
+
+- `CONTACT_HASH_PEPPER` (required, ≥ 32 chars): key for contact HMACs (ED-004). `.env.example`
+  has a dev-only value. Every real environment needs its own random value,
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`, kept in the host's secret store.
+  It must not change once real data exists (all stored hashes would stop matching).
+- `PHOTO_STORAGE_DIR` (default `var/photos`, relative to the repo root, gitignored): local-disk
+  photo storage for development.
+
 ## Fallback: no Docker
 
 Use this only if Docker Desktop stops working. Not exercised in M0 because Docker worked.

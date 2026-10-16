@@ -25,12 +25,12 @@ pushed branch; a fresh clone can be set up by following the README.
 
 ## M1 — Domain model and submission API (week 2)
 
-- [ ] SQLAlchemy models + Alembic migration for the SPEC data model (except users/outcomes/disputes).
-- [ ] Storage interface + local-disk implementation; images re-encoded, EXIF stripped, size and
+- [x] SQLAlchemy models + Alembic migration for the SPEC data model (except users/outcomes/disputes).
+- [x] Storage interface + local-disk implementation; images re-encoded, EXIF stripped, size and
       dimension limits, decompression-bomb protection.
-- [ ] `POST /checks` (multipart) with validation and one error shape; `GET /checks/{id}`.
-- [ ] Contact normalization (phonenumbers lib, email lowercasing) + HMAC hashing with pepper.
-- [ ] Unit tests for validation and normalization; integration tests for both endpoints.
+- [x] `POST /checks` (multipart) with validation and one error shape; `GET /checks/{id}`.
+- [x] Contact normalization (phonenumbers lib, email lowercasing) + HMAC hashing with pepper.
+- [x] Unit tests for validation and normalization; integration tests for both endpoints.
 
 Done when: a check with 3 photos can be created and read back; invalid input returns the
 documented error shape; raw contact values are not in the database (verified by query).
@@ -148,3 +148,10 @@ outside Claude Code.
   pytest 4/4; web: eslint ok, tsc ok, vitest 4/4, build ok (/ is partial prerender); CI run 38851272104
   green (both jobs) on branch m0-foundation; fresh clone of m0-foundation set up per README (short path,
   see P-004): pytest 4/4, npm ci, lint, typecheck, vitest 4/4. Commits 10d9fc6 (main), e582964 + follow-up (m0-foundation).
+- 2026-10-16, M1: migration 0002 upgrade → downgrade → upgrade OK, `alembic check` no drift; api: ruff ok,
+  mypy strict ok (app + tests/alembic), pytest 83/83 (5 integration, real Postgres 16.15 in Docker);
+  live API on :8100: `POST /checks` with 3 photos (JPEG with EXIF/GPS, PNG RGBA, WebP) → 202, `GET` → 200 with
+  3 photos 640x480/800x600/400x300 and contacts [phone, email]; stored files are JPEG with 0 EXIF tags;
+  invalid form → 422 `validation_error` listing 6 fields; unknown id → 404 `not_found`; psql: both
+  `hmac_hash` 32 bytes, 0 rows in checks/check_contacts/check_photos/signal_results containing the raw
+  phone or email. CI fix (push trigger → main only) in its own commit. Commits on branch m1-domain-model.

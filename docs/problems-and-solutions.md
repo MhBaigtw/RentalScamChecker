@@ -33,3 +33,14 @@ Format: symptom, root cause, fix, lesson.
   (needs admin, not done): set `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled`
   to 1.
 - Lesson: setup docs must state path assumptions that aren't obvious.
+
+## P-005: Manual curl test sent 3 photos but the API saw none  (2026-10-16, M1)
+- Symptom: during the M1 end-to-end check, `curl -F 'contact_phone=(905) 555-0142' -F photos=@p1.jpg ...`
+  returned `contact_phone: Not a valid phone number` and `photos: Upload between 1 and 10 photos`.
+  The automated tests (TestClient) passed, and the same number was valid when checked in Python.
+- Root cause: in curl's `-F` syntax, a value that starts with `(` opens a nested
+  `multipart/mixed` part. curl folded the photos into the phone field. Seen with `--trace-ascii`.
+  The API was correct.
+- Fix: use `--form-string` for text fields (sent literally), `-F name=@file` only for files.
+- Lesson: when an end-to-end check disagrees with the tests, inspect the raw request before
+  changing the code.
