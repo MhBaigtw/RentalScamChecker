@@ -154,4 +154,6 @@ outside Claude Code.
   3 photos 640x480/800x600/400x300 and contacts [phone, email]; stored files are JPEG with 0 EXIF tags;
   invalid form → 422 `validation_error` listing 6 fields; unknown id → 404 `not_found`; psql: both
   `hmac_hash` 32 bytes, 0 rows in checks/check_contacts/check_photos/signal_results containing the raw
-  phone or email. CI fix (push trigger → main only) in its own commit. Commits on branch m1-domain-model.
+  phone or email. CI run 38968326188 green (both jobs; one pull_request run, no duplicate push run;
+  83 passed, `alembic check` no drift). CI fix (push trigger → main only) is its own commit aff0c3c;
+  M1 commits d148ee8 (code) + 3c396aa (docs) on branch m1-domain-model, PR #2.
