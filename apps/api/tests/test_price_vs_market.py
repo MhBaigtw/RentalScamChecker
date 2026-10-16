@@ -112,12 +112,32 @@ def test_cma_fallback_is_named_in_the_explanation(signal: PriceVsMarketSignal) -
 
 
 def test_all_units_fallback_says_so(signal: PriceVsMarketSignal) -> None:
-    result = signal.run(check(1000, city="Hamilton"), CTX)  # no vacant figure for Hamilton
+    result = signal.run(check(1000, city="Hamilton"), CTX)  # no vacant figure in Hamilton CMA
 
     assert result.evidence["rent_basis"] == "all_units"
     assert result.evidence["baseline"] == (
-        "average rent (all units, including long-time tenants) for 2-bedroom units in Hamilton"
+        "average rent (all units, including long-time tenants) for 2-bedroom units in "
+        "the Hamilton metropolitan area"
     )
+
+
+def test_estimated_baseline_is_marked_in_evidence_and_explanation(
+    signal: PriceVsMarketSignal,
+) -> None:
+    # Oakville 3+ bed: vacant suppressed -> 2,500 x (2,800 / 2,300) = 3,044 (synthetic data).
+    result = signal.run(check(2000, bedrooms=3), CTX)
+
+    assert result.evidence["rent_basis"] == "municipality_estimated_vacant"
+    assert result.evidence["reference_rent_cents"] == 304400
+    assert result.evidence["estimate_ratio"] == 1.2174
+    assert result.evidence["estimate_inputs"] == {
+        "municipality_all_units_cents": 250000,
+        "cma_vacant_cents": 280000,
+        "cma_all_units_cents": 230000,
+    }
+    assert result.explanation is not None
+    assert "estimated from local averages" in result.explanation
+    assert "(1.22x)" in result.explanation
 
 
 def test_rent_above_reference_says_above(signal: PriceVsMarketSignal) -> None:
@@ -183,3 +203,26 @@ def test_wording_never_calls_the_listing_a_scam(
     result = signal.run(check(rent, unit_type=unit_type), CTX)
 
     assert "scam" not in f"{result.explanation} {result.next_step}".lower()
+
+
+# --- Regression against the committed CMHC dataset (real October 2025 figures) ---
+
+REAL_DATA = Path(__file__).parents[3] / "data/reference/cmhc/rms_average_rent_2025_10.csv"
+
+
+@pytest.fixture
+def real_signal(session_factory: sessionmaker[Session]) -> PriceVsMarketSignal:
+    with session_factory.begin() as s:
+        load_rows(s, read_csv(REAL_DATA))
+    return PriceVsMarketSignal(session_factory, medium_below_percent=30, high_below_percent=50)
+
+
+def test_typical_milton_two_bedroom_is_not_flagged(real_signal: PriceVsMarketSignal) -> None:
+    """The old order compared Milton with the Toronto CMA vacant figure ($2,530), flagging a
+    typical $1,700 2-bed as 33% below. The estimated local baseline is $2,062 (ED-021)."""
+    result = real_signal.run(check(1700, city="Milton"), CTX)
+
+    assert result.severity == "none"
+    assert result.evidence["rent_basis"] == "municipality_estimated_vacant"
+    assert result.evidence["reference_rent_cents"] == 206200
+    assert result.evidence["percent_below_reference"] == 17.6

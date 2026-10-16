@@ -1,20 +1,26 @@
 """price_vs_market: compare the asking rent with CMHC's average rent for the same city and
 bedroom count (SPEC 4). A deterministic rule on public data; no model, no network (ED-021).
 
-Baseline, in order of preference: the vacant-unit average (what landlords ask for empty units,
-closest to what a new tenant pays), then the overall average of all units. Rooms are skipped:
-CMHC averages describe whole units only.
+Baseline: the vacant-unit average (what landlords ask for empty units, closest to what a new
+tenant pays), estimated from local averages when CMHC suppressed it (see find_reference). Rooms
+are skipped: CMHC averages describe whole units only. Basements are compared with a caveat.
 """
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from rentalscamchecker.reference_rents import Reference, bedroom_bucket, find_reference
+from rentalscamchecker.reference_rents import (
+    ESTIMATED_VACANT,
+    Reference,
+    bedroom_bucket,
+    find_reference,
+)
 from rentalscamchecker.signals.base import CheckInput, Severity, SignalContext, SignalResult
 
 MONTH_NAMES = {4: "April", 10: "October"}
 BEDROOM_LABELS = {0: "studio", 1: "1-bedroom", 2: "2-bedroom", 3: "3+ bedroom"}
 BASELINE_LABELS = {
     "vacant_units": "average asking rent for vacant",
+    ESTIMATED_VACANT: "estimated average asking rent (estimated from local averages) for vacant",
     "all_units": "average rent (all units, including long-time tenants) for",
 }
 SURVEY_CAVEAT = (
@@ -24,6 +30,11 @@ SURVEY_CAVEAT = (
 BASEMENT_CAVEAT = (
     "This listing is a basement apartment. Basements are not in CMHC's survey and often rent "
     "for less than these averages, so read this comparison with care."
+)
+ESTIMATE_NOTE = (
+    "CMHC doesn't publish a vacant-unit figure for this area, so it was estimated from local "
+    "averages: the area's overall average, scaled by how much more vacant units cost than the "
+    "overall average across the {cma} metropolitan area ({ratio:.2f}x)."
 )
 
 
@@ -140,11 +151,26 @@ def _evidence(
         "reliability": reference.reliability,
         "source": reference.source,
         "source_url": reference.source_url,
+        **_estimate_evidence(reference),
         "attribution": (
             f"Adapted from Canada Mortgage and Housing Corporation, Rental Market Survey, "
             f"{_survey(reference)}. This does not constitute an endorsement by Canada Mortgage "
             "and Housing Corporation of this product."
         ),
+    }
+
+
+def _estimate_evidence(reference: Reference) -> dict[str, object]:
+    if reference.estimate is None:
+        return {}
+    e = reference.estimate
+    return {
+        "estimate_ratio": e.ratio,
+        "estimate_inputs": {
+            "municipality_all_units_cents": e.municipality_all_units_cents,
+            "cma_vacant_cents": e.cma_vacant_cents,
+            "cma_all_units_cents": e.cma_all_units_cents,
+        },
     }
 
 
@@ -174,6 +200,8 @@ def _explanation(
                 "out not to be what they claim."
             )
             parts.append(SURVEY_CAVEAT)
+    if reference.estimate is not None:
+        parts.append(ESTIMATE_NOTE.format(cma=reference.cma_name, ratio=reference.estimate.ratio))
     if check.unit_type == "basement":
         parts.append(BASEMENT_CAVEAT)
     return " ".join(parts)

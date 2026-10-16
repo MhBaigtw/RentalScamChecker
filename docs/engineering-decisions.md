@@ -368,15 +368,23 @@ should fill in "Code locations" once the code exists.
   table); zone level with boundary files (Mississauga and Brampton have 2-3 sub-zones; would need
   point-in-polygon on a geocode, making the signal depend on the geocoder).
 - Chosen:
-  - Baseline order (Humayun's spec), first value with reliability a, b or c wins:
-    1. municipality, vacant units; 2. CMA, vacant units; 3. municipality, all units;
-    4. CMA, all units. Otherwise `skipped`. Reliability `d` is never used.
+  - Baseline order (revised before M4, see "Correction" below); a figure counts only with
+    reliability a, b or c:
+    1. municipality, vacant units;
+    2. **estimated municipality vacant** = municipality all-units × (CMA vacant / CMA all-units,
+       same bedroom bucket), when all three are usable. `rent_basis =
+       municipality_estimated_vacant`; evidence carries `estimate_ratio` and the three inputs; the
+       explanation says "estimated from local averages" and gives the ratio. Its reliability is
+       the worst of the three inputs';
+    3. CMA, vacant units;
+    4. CMA, all units.
+    Otherwise `skipped`. Reliability `d` is never used.
   - Municipality level matched by the city the user typed (normalized: `City of Oakville, ON` →
     `oakville`, Toronto districts → `toronto`), with no network, so the signal is independent of
     the geocoder. address_sanity separately checks that the typed city matches the geocoded one.
   - `unit_type` on the submission (`whole_unit` default, `room`, `basement`). Rooms are `skipped`
-    ("CMHC's rent data covers whole units only"); basements are compared, with a caveat in the
-    explanation that basements aren't in the survey and often rent for less.
+    ("CMHC's rent data covers whole units only"). Basements are compared, with a caveat that they
+    aren't in the survey and often rent for less.
   - Severity: `medium` from 30% below the baseline, `high` from 50% below (`PRICE_*_BELOW_PERCENT`);
     never flagged when above.
   - Evidence: listing and reference rent, percent below, `rent_basis` (`vacant_units`/`all_units`),
@@ -390,13 +398,27 @@ should fill in "Code locations" once the code exists.
 - Why: the vacant-unit average is CMHC's published figure closest to the price a new tenant is
   asked, which is what a listing shows; municipality figures match how users describe a listing.
   Answer to the SPEC question: zone boundaries aren't needed for v1.
-- Trade-offs and open issue:
-  - **Fallback order can overstate the baseline for small municipalities.** Where a municipality's
-    vacant value is suppressed, step 2 (CMA vacant) wins over step 3 (its own all-units value), even
-    when the CMA is much pricier. Milton/Halton Hills 2-bedroom: CMA vacant $2,530 vs the zone's own
-    all-units $1,667. A typical $1,700 Milton listing would be 33% below the baseline and flagged
-    `medium`. Markham and Caledon 2-bedroom are in the same situation. Raised with Humayun at the
-    end of M3; not changed without his decision.
+- Correction (pre-M4): **the first order (M3) caused false positives.** It was municipality
+  vacant → CMA vacant → municipality all-units → CMA all-units. Where a municipality's vacant value
+  was suppressed, the CMA's vacant figure won over the municipality's own data even when the CMA
+  is much pricier. Milton/Halton Hills 2-bedroom was compared with $2,530 (Toronto CMA vacant)
+  while the zone's own all-units average is $1,667, so a typical $1,700 Milton 2-bed showed as 33%
+  below and was flagged `medium`. Markham was affected the same way. Real 2-bedroom baselines
+  after the change (October 2025):
+
+  | | before | after | how |
+  |---|---|---|---|
+  | Milton | $2,530 (CMA vacant) | $2,062 (b) | estimated: 1,667 × (2,530 / 2,045 = 1.2372) |
+  | Markham | $2,530 (CMA vacant) | $2,469 (c) | estimated: 1,996 × 1.2372 |
+  | Caledon | $2,530 (CMA vacant) | $2,530 (a) | unchanged: Caledon's all-units value is suppressed too |
+
+  A $1,700 Milton 2-bed is now 17.6% below the baseline: severity `none`. A regression test runs
+  this case against the committed dataset (`test_typical_milton_two_bedroom_is_not_flagged`).
+- Trade-offs:
+  - The estimate assumes a municipality's vacant/all-units ratio equals its CMA's. That's an
+    approximation: across the 3 municipalities in the comparison table the ratio ranges
+    1.135-1.236 (Toronto CMA: 1.237). It
+    uses local price levels, which matter more than the exact premium.
   - Purpose-built rentals only: basements and condos can legitimately differ (caveat in the text;
     to be measured in the evaluation). A misspelled or unlisted city means no comparison. The
     dataset must be refreshed yearly.
