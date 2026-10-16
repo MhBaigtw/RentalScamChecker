@@ -12,32 +12,48 @@ Run from `apps/api` with the venv's interpreter (`.venv\Scripts\python.exe` on W
 | Types (tests, migrations) | `python -m mypy tests alembic` |
 | Tests | `python -m pytest -v` |
 
-Tests marked `integration` need Postgres at `DATABASE_URL` (start it with `docker compose up -d`).
-They are **not** skipped when the DB is missing; they fail, so a missing DB can't be mistaken for
-a pass.
+Tests marked `integration` need the Postgres server from `DATABASE_URL` (start it with
+`docker compose up -d`). They are **not** skipped when the DB is missing; they fail, so a missing
+DB can't be mistaken for a pass.
 
-Integration tests write to the database they run against and don't clean up (rows are scoped
-by fresh UUIDs, so tests don't interfere with each other). Locally that is the dev database. Photo
-files go to a per-test `tmp_path`.
+### The test database (dev data and test data never mix)
 
-Current tests (M1): 83 total, all passing locally on 2026-10-16; 5 of them are `integration`
+Integration tests never touch the dev database. They use a separate database on the same server
+(`tests/db.py`, fixtures in `tests/conftest.py`):
+
+- Name: `TEST_DATABASE_URL` if set, otherwise `DATABASE_URL` with `_test` appended to the database
+  name (locally `rentalscamchecker_test`). Anything whose name doesn't end in `_test` is refused
+  before any connection is made (`test_db_guard.py`).
+- Once per test session (`test_database` fixture): `CREATE DATABASE` if missing (needs a role
+  allowed to create databases, which `rsc` is in Docker and in CI), `alembic upgrade head` run from
+  code, then `TRUNCATE` of every table in case an earlier run was interrupted.
+- After **every** test marked `integration` (autouse fixture): `TRUNCATE ... RESTART IDENTITY
+  CASCADE` on every model table. Tests that aren't marked `integration` never trigger any of
+  this, so the unit suite runs without a database.
+- Photo files go to a per-test `tmp_path`.
+
+Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, with 13 checks. After
+it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
+database still had the same 13. A second run against the existing test database also passed.
+
+Current tests: 98 total, all passing locally on 2026-10-16; 6 of them are `integration`
 (real Postgres).
 
 | File | Kind | Covers |
 |---|---|---|
 | `test_health.py` (4) | unit + 1 integration | error shape, `/health` up/down, request id echo |
-| `test_contacts.py` (22) | unit | phone formats → one E.164 value, foreign numbers, invalid phones/emails, email lowercasing, HMAC deterministic / depends on pepper / depends on kind |
-| `test_validation.py` (27) | unit | cleaned output, all missing fields reported at once, rent formats and bad rents (incl. NaN/Infinity, 3 decimals), bedrooms, URL schemes, length limits, per-field contact errors |
+| `test_contacts.py` (27) | unit | phone formats → one E.164 value, foreign numbers, invalid phones/emails, email lowercasing, HMAC deterministic / depends on pepper / depends on kind; extraction from text: common formats, no false positives on prices/dates/postal codes/units, digits inside an email, repeats listed once but all redacted, 10-per-kind cap |
+| `test_validation.py` (30) | unit | cleaned output, all missing fields reported at once, rent formats and bad rents (incl. NaN/Infinity, 3 decimals), bedrooms, URL schemes, length limits, per-field contact errors; text contacts redacted; same number in field and text → one contact (`field`) |
+| `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
-| `test_checks_api.py` (9) | 5 without DB + 4 integration | empty form lists every error; 11 photos; bad photo reported by index and no file written; bad UUID and unknown route use the error shape; **3-photo check created and read back** with stored files verified EXIF-free; **raw contacts absent from every row of the check** and stored hashes equal the expected HMACs; contacts optional; unknown id → 404 shape |
+| `test_checks_api.py` (10) | 5 without DB + 5 integration | empty form lists every error; 11 photos; bad photo reported by index and no file written; bad UUID and unknown route use the error shape; **3-photo check created and read back** with stored files verified EXIF-free; **raw contacts (fields and inside the text) absent from every row of the check**, with the expected HMACs and sources; **same number in field and text → one link**; contacts optional; unknown id → 404 shape |
 
 The raw-contact test was checked to be able to fail: a throwaway copy with the phone number
 placed in `listing_text` failed as expected (see docs/database-design.md "Known gap").
 
 Not covered: concurrent submissions; storage write failure part-way (cleanup path is code-reviewed,
-not tested); real phone photos (HEIC, large JPEGs). Integration tests don't run on a clean
-database, so they can't assert global row counts.
+not tested); real phone photos (HEIC, large JPEGs).
 
 ## Web (`apps/web`)
 

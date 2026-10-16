@@ -1,5 +1,6 @@
 import io
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -121,8 +122,10 @@ def client(photo_dir: Path) -> TestClient:
 
 
 @pytest.fixture
-def engine() -> sa.Engine:
-    return sa.create_engine(make_settings().database_url)
+def engine(test_database: str) -> Iterator[sa.Engine]:
+    engine = sa.create_engine(test_database)
+    yield engine
+    engine.dispose()
 
 
 @pytest.mark.integration

@@ -16,7 +16,8 @@ if config.config_file_name is not None:
 # The models' metadata, so `alembic revision --autogenerate` can diff it against the database.
 target_metadata = Base.metadata
 
-database_url = get_settings().database_url
+# Callers running Alembic from code (the test suite) can pass the URL in config.attributes.
+database_url: str = config.attributes.get("database_url") or get_settings().database_url
 
 
 def run_migrations_offline() -> None:
