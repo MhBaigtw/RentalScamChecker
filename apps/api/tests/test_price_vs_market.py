@@ -163,13 +163,21 @@ def test_room_is_skipped_because_cmhc_covers_whole_units_only(
     assert result.next_step
 
 
-def test_basement_is_compared_with_a_caveat(signal: PriceVsMarketSignal) -> None:
-    result = signal.run(check(1500, unit_type="basement"), CTX)
+@pytest.mark.parametrize(
+    ("rent", "whole_unit_severity", "basement_severity"),
+    [(1100, "high", "low"), (1500, "medium", "low"), (2200, "none", "none")],
+)
+def test_basement_severity_is_capped_at_low_with_the_caveat(
+    signal: PriceVsMarketSignal, rent: int, whole_unit_severity: str, basement_severity: str
+) -> None:
+    whole = signal.run(check(rent), CTX)
+    basement = signal.run(check(rent, unit_type="basement"), CTX)
 
-    assert (result.status, result.severity) == ("ok", "medium")
-    assert result.evidence["unit_type"] == "basement"
-    assert result.explanation is not None
-    assert result.explanation.endswith(BASEMENT_CAVEAT)
+    assert whole.severity == whole_unit_severity
+    assert (basement.status, basement.severity) == ("ok", basement_severity)
+    assert basement.evidence["unit_type"] == "basement"
+    assert basement.explanation is not None
+    assert basement.explanation.endswith(BASEMENT_CAVEAT)
 
 
 def test_unknown_city_is_skipped_with_a_next_step(signal: PriceVsMarketSignal) -> None:

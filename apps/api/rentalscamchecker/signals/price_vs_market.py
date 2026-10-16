@@ -3,7 +3,8 @@ bedroom count (SPEC 4). A deterministic rule on public data; no model, no networ
 
 Baseline: the vacant-unit average (what landlords ask for empty units, closest to what a new
 tenant pays), estimated from local averages when CMHC suppressed it (see find_reference). Rooms
-are skipped: CMHC averages describe whole units only. Basements are compared with a caveat.
+are skipped: CMHC averages describe whole units only. Basements are compared, but their severity
+is capped at "low": they aren't in CMHC's survey and often rent for less.
 """
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,6 +37,8 @@ ESTIMATE_NOTE = (
     "averages: the area's overall average, scaled by how much more vacant units cost than the "
     "overall average across the {cma} metropolitan area ({ratio:.2f}x)."
 )
+# Severity order, to cap basements at "low".
+_RANK: dict[str, int] = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
 class PriceVsMarketSignal:
@@ -80,6 +83,8 @@ class PriceVsMarketSignal:
             )
         percent_below = (reference.rent_cents - check.rent_cents) / reference.rent_cents * 100
         severity = self._severity(percent_below)
+        if check.unit_type == "basement" and _RANK[severity] > _RANK["low"]:
+            severity = "low"
         return SignalResult(
             name=self.name,
             version=self.version,

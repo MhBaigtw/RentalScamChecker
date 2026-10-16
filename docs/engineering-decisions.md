@@ -384,7 +384,8 @@ should fill in "Code locations" once the code exists.
     the geocoder. address_sanity separately checks that the typed city matches the geocoded one.
   - `unit_type` on the submission (`whole_unit` default, `room`, `basement`). Rooms are `skipped`
     ("CMHC's rent data covers whole units only"). Basements are compared, with a caveat that they
-    aren't in the survey and often rent for less.
+    aren't in the survey and often rent for less, and their severity is **capped at `low`**
+    (pre-M4).
   - Severity: `medium` from 30% below the baseline, `high` from 50% below (`PRICE_*_BELOW_PERCENT`);
     never flagged when above.
   - Evidence: listing and reference rent, percent below, `rent_basis` (`vacant_units`/`all_units`),
