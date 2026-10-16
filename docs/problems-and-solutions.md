@@ -70,3 +70,17 @@ Format: symptom, root cause, fix, lesson.
   statically. Verified locally with `mypy --platform linux` as well as the default.
 - Lesson: platform-specific code needs a type check per platform; `mypy --platform linux` catches
   this before CI does.
+
+## P-008: "Caledon" and "Milton" had no reference rent: the province-suffix regex ate the name  (2026-10-16, M3)
+- Symptom: the CMA-fallback tests for Caledon and Milton failed with `None`, although the
+  municipal and CMA rows were in the database, and each half of the lookup worked when called
+  separately.
+- Root cause: `normalize_city` stripped a trailing province with `r",?\s*(on|ont|ontario)\.?$"`.
+  The comma and the space were both optional, so it also removed the final "on" of Caledon,
+  Milton, Burlington and Kingston ("caled", "milt"...). Two tests (Burlington, Kingston expected
+  `None`) passed by accident.
+- Fix: the suffix must follow a comma or whitespace: `r"(,\s*|\s+)(on|ont|ontario)\.?$"`.
+  Regression cases for those four names added. The same function is used by address_sanity's
+  city comparison, which had the same bug.
+- Lesson: a test whose expected value is "nothing found" can pass for the wrong reason; check
+  that a "None" result is None for the reason you think.

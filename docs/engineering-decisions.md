@@ -328,3 +328,77 @@ should fill in "Code locations" once the code exists.
   twice) keep the first, not the latest. Taking the check row lock on every result write
   serializes writes per check; checks have few signals.
 - Code locations: `apps/api/rentalscamchecker/pipeline.py` (`_record_result`)
+
+## ED-021: price_vs_market compares with the municipality's CMHC average, falling back to the CMA  (2026-10-16, M3)
+- Problem / decision: which CMHC figure a listing's rent is compared with, and how the data gets
+  into the database. Answers SPEC open question "Can CMHC zone boundaries be obtained?".
+- Findings: CMHC's Housing Market Information Portal (HMIP) publishes Rental Market Survey average
+  rents by bedroom type (studio, 1, 2, 3+) for CMAs, for RMS **zones**, and for **municipalities
+  (census subdivisions)**, each value with a reliability letter (a-d) or suppressed (`**`). In
+  the Toronto CMA, Oakville is its own zone; Mississauga and Brampton are split into 2-3 sub-zones.
+  Matching a listing to a sub-zone would need the zone boundary files; matching it to a
+  municipality only needs the city name. Latest survey: October 2025. The survey covers the
+  purpose-built rental market (row houses and apartments), not condos, basements or rooms.
+- Alternatives considered: CMA-level only (an Oakville listing compared with all of Toronto,
+  including downtown); zone level (needs boundaries plus point-in-polygon on a geocode, which
+  would make this signal depend on the geocoder); municipality level.
+- Chosen: municipality (CSD) level, falling back to the CMA when the municipal figure is
+  suppressed or rated `d` ("use with caution"). Skipped (status `skipped`, with a next step) when
+  the city isn't in the dataset. Bedrooms map to CMHC buckets (4+ → "3 bedroom +"). Severity:
+  `medium` from 30% below the reference, `high` from 50% below (`PRICE_*_BELOW_PERCENT`); never
+  flagged when above. The signal uses the city the user typed, normalized (`City of Oakville, ON`
+  → `oakville`; Toronto districts → `toronto`), and no network, so it stays independent of the
+  geocoder; address_sanity separately checks that the typed city matches the geocoded one.
+  Evidence: listing rent, reference rent, percent below, geography and level, CMA, survey month
+  and year, reliability, source URL, and CMHC's required "Adapted from ..." attribution. It
+  deliberately leaves out the thresholds (SPEC 10). The explanation states the survey's coverage
+  caveat. Data: `data/reference/cmhc/fetch_rms.py` writes a CSV with the source URL on every
+  row (suppressed values kept with empty rent, so the city → CMA link survives); the loader
+  `python -m rentalscamchecker.reference_rents <csv>` upserts it. The loader lives in the app
+  package so it is type-checked and tested.
+- Why: municipality figures match how users describe a listing (by city), are published with
+  reliability codes, and cover all three Sheridan campus cities with grade a/b data for 2-bedroom
+  units. Answer to the SPEC question: zone boundaries aren't needed for v1. Revisit zone level
+  only if municipal averages prove too coarse (large cities like Mississauga).
+- Trade-offs: the survey covers purpose-built rentals, while students often rent basements and
+  rooms, which can be legitimately cheaper (stated in the explanation; to be measured in the
+  evaluation). A typed city that's misspelled or not in the dataset means the price isn't checked.
+  The dataset is a snapshot that must be refreshed yearly (the October survey is published around
+  December).
+- Code locations: `apps/api/rentalscamchecker/reference_rents.py`, `signals/price_vs_market.py`,
+  `data/reference/cmhc/fetch_rms.py`, migration `0005_reference_rents_geocoding`
+
+## ED-022: Nominatim client: identified, cached, globally rate-limited through Postgres  (2026-10-16, M3)
+- Problem / decision: how address_sanity geocodes while following the Nominatim usage policy
+  (max 1 request/s in total, identifying User-Agent, results cached, no repeated queries,
+  attribution, ODbL data).
+- Alternatives considered: a per-process `time.sleep` limiter (doesn't hold across several worker
+  processes); Redis (new infrastructure); a paid geocoder (cost; SPEC says later if needed).
+- Chosen:
+  - User-Agent `RentalScamChecker/0.1 (+<repo URL>; <NOMINATIM_CONTACT_EMAIL>)`. The email comes
+    only from the environment; the API and the worker refuse to start if `address_sanity` is
+    enabled without a valid one.
+  - Cache table `geocode_cache` keyed by the normalized query; "not found" is cached too.
+  - Rate limit: a `rate_limits` row per service. A caller locks it (`SELECT ... FOR UPDATE`, with a
+    20 s `lock_timeout`), sleeps until `NOMINATIM_MIN_INTERVAL_SECONDS` (≥ 1, validated) has
+    passed since the last request, makes the HTTP call **while holding the lock**, then records the
+    time. All our requests are serialized across every thread and process.
+  - Query: `"<address>, <city>, Canada"`, `countrycodes=ca`, `format=jsonv2`, `addressdetails=1`,
+    `limit=1`; 10 s HTTP timeout. HTTP errors and network errors raise `GeocodingUnavailable`, and
+    the job is retried with backoff. Errors are not cached.
+  - Attribution "© OpenStreetMap contributors (data under the ODbL)" is in every address_sanity
+    result's evidence for the UI to show.
+- Rules (address_sanity): not found → `low`; found in a different place than the typed city →
+  `medium` (the typed city may match any locality field: city, town, suburb, neighbourhood..., so
+  "Streetsville" matches a Mississauga address); OSM class/type is non-residential (amenity, shop,
+  office, commercial or school building, ...) → `medium`; both → `high`.
+- Why: Postgres is already there and already coordinates the workers (ED-002); the limiter is
+  correct across processes and is tested with three geocoders racing.
+- Trade-offs: holding the row lock during the HTTP call means queued geocodes wait in line, so
+  each costs about 1 s plus latency; fine at our volume. Many concurrent checks would back up
+  (lock timeout 20 s → the job fails and retries). The geocoded point isn't yet written to the
+  `checks.geocoded_*` columns; it's in the result evidence, and the M6 graph will decide where it
+  lives. OSM's coverage of house numbers in new subdivisions is incomplete, which is why not-found
+  is only `low`.
+- Code locations: `apps/api/rentalscamchecker/geocoding.py`, `signals/address_sanity.py`,
+  `signals/registry.py`, migration `0005_reference_rents_geocoding`
