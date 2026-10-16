@@ -1,7 +1,8 @@
 // Calls the API's GET /health and turns every possible outcome into a typed status.
 // Pure function with an injectable fetch so it can be unit tested without Next.js or a server.
 
-export const DEFAULT_API_URL = "http://localhost:8100";
+// 127.0.0.1 rather than localhost: see docs/problems-and-solutions.md P-006.
+export const DEFAULT_API_URL = "http://127.0.0.1:8100";
 const TIMEOUT_MS = 5000;
 
 export type HealthStatus =

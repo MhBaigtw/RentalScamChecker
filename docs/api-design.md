@@ -1,7 +1,7 @@
 # API design
 
 FastAPI app in `apps/api/rentalscamchecker/`. The interactive OpenAPI docs are served at
-`/docs` when the API is running (`http://localhost:8100/docs`).
+`/docs` when the API is running (`http://127.0.0.1:8100/docs`).
 
 ## Error shape
 

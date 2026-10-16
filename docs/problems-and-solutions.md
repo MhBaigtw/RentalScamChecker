@@ -48,14 +48,18 @@ Format: symptom, root cause, fix, lesson.
 ## P-006: Status polling looked ~2 s per request slower than the API logs said  (2026-10-16, M2)
 - Symptom: a Python script polling `http://localhost:8100` saw its first response after 4.4 s,
   while the API's own logs showed requests taking milliseconds.
-- Root cause (likely, not proven): on Windows, `localhost` resolves to `::1` first; uvicorn listens
-  on `127.0.0.1` only, so each new connection waits for the IPv6 attempt to fail before falling
-  back to IPv4.
+- Root cause (verified pre-M3): on Windows, `localhost` resolves to `['::1', '127.0.0.1']`;
+  uvicorn listens on `127.0.0.1` only, so the client first tries `::1`, and Windows reports the
+  refused connection only after about 2 s (it retries refused connects), then falls back to IPv4.
+  Measured with urllib against `/health`: `localhost` 2,075 ms and 2,061 ms, `127.0.0.1` 21 ms
+  and 12 ms; a raw `::1` connect was refused after 2,006 ms.
 - Fix: use `http://127.0.0.1:8100` in scripts. Then: POST 0.12 s, pending -> running -> complete
   visible at 0.16 s / 0.66 s / 1.72 s.
 - Lesson: when a client-side timing disagrees with server logs, suspect the connection
-  (DNS/IPv6) before the server. Relevant for the web app's `API_URL` too (it uses `localhost`;
-  revisit if server-side fetches look slow).
+  (DNS/IPv6) before the server.
+- Follow-up (pre-M3): `API_URL` in `.env.example` and the web app's `DEFAULT_API_URL` now use
+  `http://127.0.0.1:8100` for the same reason. Postgres URLs keep `localhost`: Docker publishes
+  port 5434 on IPv6 too (`[::]:5434`), so there is no fallback delay there.
 
 ## P-007: mypy passed on Windows, failed in CI on Linux  (2026-10-16, M2)
 - Symptom: CI's `mypy tests alembic` reported `Module has no attribute "CREATE_NEW_PROCESS_GROUP"`
