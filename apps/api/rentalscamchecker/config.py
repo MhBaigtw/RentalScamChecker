@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # apps/api/rentalscamchecker/config.py -> repo root is three levels above this package.
@@ -44,12 +44,24 @@ class Settings(BaseSettings):
     # A claimed job is reserved for this long; if the worker hasn't finished by then (crash,
     # hang), the job is handed out again. Must be longer than any single signal can take.
     job_lease_seconds: float = 60.0
+    # Hard limit for one attempt of one job, always below the lease (checked at startup): an
+    # attempt that overruns is failed as retryable before its lease can expire (ED-017).
+    job_timeout_seconds: float = 45.0
     # Retry n waits min(max, base * 2^(n-1)) seconds.
     job_backoff_base_seconds: float = 2.0
     job_backoff_max_seconds: float = 300.0
     worker_concurrency: int = Field(default=2, ge=1)
     # How long an idle worker thread waits before polling the queue again.
     worker_poll_interval_seconds: float = 1.0
+
+    @model_validator(mode="after")
+    def _timeout_below_lease(self) -> "Settings":
+        if not 0 < self.job_timeout_seconds < self.job_lease_seconds:
+            raise ValueError(
+                f"JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds}) must be > 0 and less than "
+                f"JOB_LEASE_SECONDS ({self.job_lease_seconds})"
+            )
+        return self
 
     @property
     def enabled_signal_names(self) -> list[str]:

@@ -44,3 +44,14 @@ def test_stub_signal_returns_its_fixed_result() -> None:
         "none",
     )
     assert result.explanation and result.next_step
+
+
+def test_settings_reject_a_job_timeout_not_below_the_lease() -> None:
+    with pytest.raises(ValueError, match="JOB_TIMEOUT_SECONDS"):
+        make_settings(UNREACHABLE_DB_URL, job_lease_seconds=60, job_timeout_seconds=60)
+
+
+def test_default_job_timeout_is_below_the_default_lease() -> None:
+    settings = make_settings(UNREACHABLE_DB_URL)
+
+    assert (settings.job_timeout_seconds, settings.job_lease_seconds) == (45.0, 60.0)

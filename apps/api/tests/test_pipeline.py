@@ -28,7 +28,11 @@ from tests.helpers import image_bytes, make_settings
 pytestmark = pytest.mark.integration
 
 FAST = WorkerConfig(
-    concurrency=1, poll_interval_seconds=0.05, lease_seconds=30, backoff_base_seconds=0
+    concurrency=1,
+    poll_interval_seconds=0.05,
+    lease_seconds=30,
+    job_timeout_seconds=20,
+    backoff_base_seconds=0,
 )
 
 
@@ -256,3 +260,85 @@ def test_check_created_via_api_reaches_complete_through_the_worker(
         ("stub", "ok", "none")
     ]
     assert body["signals"][0]["evidence"] == {"stub": True, "slept_seconds": 0.1}
+
+
+# --- idempotent result writes (ED-020) ---
+
+
+def result_rows(sf: sessionmaker[Session], check_id: uuid.UUID) -> list[tuple[Any, ...]]:
+    with sf() as s:
+        rows = s.execute(
+            sa.text("SELECT name, status, error FROM signal_results WHERE check_id = :id"),
+            {"id": check_id},
+        ).all()
+    return [tuple(r) for r in rows]
+
+
+def claimed_signal_job(sf: sessionmaker[Session]) -> queue.ClaimedJob:
+    with sf.begin() as s:
+        job = queue.claim(s, lease_seconds=30)
+    assert job is not None and job.kind == "signal"
+    return job
+
+
+def test_success_replaces_an_earlier_error_result(session_factory: sessionmaker[Session]) -> None:
+    signal = FixedSignal("s")
+    check_id, _ = start_check(session_factory, [signal])
+    handler = build_handlers(session_factory, [signal], make_settings())["signal"]
+    job = claimed_signal_job(session_factory)
+
+    handler.on_dead(job, "ConnectionError: upstream down")
+    assert result_rows(session_factory, check_id) == [
+        ("s", "error", "ConnectionError: upstream down")
+    ]
+    handler.run(job)  # e.g. an abandoned timed-out attempt that succeeded after all
+
+    assert result_rows(session_factory, check_id) == [("s", "ok", None)]
+
+
+def test_error_never_replaces_a_result(session_factory: sessionmaker[Session]) -> None:
+    signal = FixedSignal("s")
+    check_id, _ = start_check(session_factory, [signal])
+    handler = build_handlers(session_factory, [signal], make_settings())["signal"]
+    job = claimed_signal_job(session_factory)
+
+    handler.run(job)
+    handler.on_dead(job, "late failure")
+
+    assert result_rows(session_factory, check_id) == [("s", "ok", None)]
+
+
+class SlowOnceSignal(FixedSignal):
+    """The first run overruns the job timeout; later runs are fast. `runs` counts finished runs."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.started = 0
+
+    def run(self, check: CheckInput, ctx: SignalContext) -> SignalResult:
+        self.started += 1
+        if self.started == 1:
+            time.sleep(1.5)
+        return super().run(check, ctx)
+
+
+def test_signal_timing_out_then_finishing_late_leaves_one_result(
+    session_factory: sessionmaker[Session],
+) -> None:
+    signal = SlowOnceSignal("slow")
+    check_id = new_check(session_factory)
+    with session_factory.begin() as s:
+        enqueue_check_jobs(s, check_id, [signal], check_timeout_seconds=3600, max_attempts=5)
+    config = WorkerConfig(
+        concurrency=1, lease_seconds=30, job_timeout_seconds=0.5, backoff_base_seconds=0
+    )
+    worker = Worker(
+        session_factory, build_handlers(session_factory, [signal], make_settings()), config
+    )
+
+    drain(worker)  # attempt 1 times out, attempt 2 succeeds, aggregator completes the check
+    time.sleep(1.5)  # attempt 1's abandoned thread now finishes and tries to write its result
+
+    assert (signal.started, signal.runs) == (2, 2)  # both attempts ran to the end
+    assert result_rows(session_factory, check_id) == [("slow", "ok", None)]
+    assert check_row(session_factory, check_id) == ("complete", None)

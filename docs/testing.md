@@ -36,8 +36,9 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M2): 127 total, all passing locally on 2026-10-16 (Windows); 25 of them are
-`integration` (real Postgres). The full suite takes about 45 s, mostly real waits for leases,
+Current tests (pre-M3): 136 total, all passing locally on 2026-10-16 (Windows); 32 of them are
+`integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
+but inherit the module's marker). The full suite takes about 45 s, mostly real waits for leases,
 backoffs and the worker process.
 
 | File | Kind | Covers |
@@ -45,9 +46,9 @@ backoffs and the worker process.
 | `test_health.py` (4) | unit + 1 integration | error shape, `/health` up/down, request id echo |
 | `test_contacts.py` (27) | unit | phone formats → one E.164 value, foreign numbers, invalid phones/emails, email lowercasing, HMAC deterministic / depends on pepper / depends on kind; extraction from text: common formats, no false positives on prices/dates/postal codes/units, digits inside an email, repeats listed once but all redacted, 10-per-kind cap |
 | `test_validation.py` (30) | unit | cleaned output, all missing fields reported at once, rent formats and bad rents (incl. NaN/Infinity, 3 decimals), bedrooms, URL schemes, length limits, per-field contact errors; text contacts redacted; same number in field and text → one contact (`field`) |
-| `test_jobs_unit.py` (10) | unit | backoff doubling and cap; enabled-signal parsing, empty list, unknown name fails at startup; stub signal's fixed result |
-| `test_job_queue.py` (12) | integration | idempotent enqueue; `run_after` respected; **a row being claimed is skipped, not waited for** (two open transactions, `lock_timeout` 2 s); **2 workers × 4 threads process 200 jobs: each exactly once**; **crashed job re-claimed after its 1 s lease expires**, and the crashed worker's late complete/fail are rejected (fencing); crash on the last attempt → dead via the reaper; **backoff: run_after − updated_at is exactly 1 s, then 0.25/0.5/1 s doubling**, job not claimable before; **poison job → dead after max_attempts** with last_error and one on_dead call; permanent error → dead after 1 attempt; unknown kind → dead; in-process stop lets the running job finish and claims no more |
-| `test_pipeline.py` (6) | integration | aggregator starts as soon as the last signal is done (an hour before its timeout); dead signal → error result + check `incomplete`; **check timeout finalizes without the missing signal**, and its late result is ignored; running a signal job twice stores one result; no signals → complete immediately; **end to end: POST /checks → jobs committed with ids-only payloads → worker → GET shows `complete` with the stub result** |
+| `test_jobs_unit.py` (12) | unit | job timeout must be below the lease (Settings) and the defaults are 45 s / 60 s; backoff doubling and cap; enabled-signal parsing, empty list, unknown name fails at startup; stub signal's fixed result |
+| `test_job_queue.py` (16) | integration | **a job exceeding the per-job timeout is failed (`JobTimeout`, worker returns after ~0.5 s, not 2 s) and retried; the abandoned first attempt finishing later changes nothing**; timeout ≥ lease or 0 rejected; idempotent enqueue; `run_after` respected; **a row being claimed is skipped, not waited for** (two open transactions, `lock_timeout` 2 s); **2 workers × 4 threads process 200 jobs: each exactly once**; **crashed job re-claimed after its 1 s lease expires**, and the crashed worker's late complete/fail are rejected (fencing); crash on the last attempt → dead via the reaper; **backoff: run_after − updated_at is exactly 1 s, then 0.25/0.5/1 s doubling**, job not claimable before; **poison job → dead after max_attempts** with last_error and one on_dead call; permanent error → dead after 1 attempt; unknown kind → dead; in-process stop lets the running job finish and claims no more |
+| `test_pipeline.py` (9) | integration | **upsert rule (ED-020): a success replaces an earlier error result; an error never replaces a result; a signal that times out and then finishes late in its abandoned thread still leaves exactly one row**; aggregator starts as soon as the last signal is done (an hour before its timeout); dead signal → error result + check `incomplete`; **check timeout finalizes without the missing signal**, and its late result is ignored; running a signal job twice stores one result; no signals → complete immediately; **end to end: POST /checks → jobs committed with ids-only payloads → worker → GET shows `complete` with the stub result** |
 | `test_worker_process.py` (1) | integration | the real `python -m rentalscamchecker.worker` process: stop signal sent while the stub job runs (SIGTERM on Linux; CTRL_BREAK on Windows, where SIGTERM can't be delivered) → job finishes `done`, the aggregator it made due stays `queued`, exit code 0, log order `shutdown_requested` < `job_done`, last line `worker_stopped` |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
@@ -63,6 +64,9 @@ it failed each time, then passed again once the code was restored:
 - reaper never dead-letters: `test_job_crashing_on_its_last_attempt_is_dead_lettered` fails.
 - aggregator never pulled forward: `test_aggregator_starts_as_soon_as_all_signals_are_done` fails.
 - SIGBREAK handler removed: `test_stop_signal_lets_the_running_job_finish` fails on Windows.
+- (pre-M3) handler called directly instead of under the timeout: `test_job_exceeding_the_timeout_is_failed_and_retried` fails.
+- (pre-M3) upsert without the "only replace an error" condition: `test_error_never_replaces_a_result` fails.
+- (pre-M3) no "check complete → write nothing" guard: `test_check_timeout_finalizes_without_the_missing_signal` fails.
 
 The raw-contact test was checked to be able to fail: a throwaway copy with the phone number
 placed in `listing_text` failed as expected (see docs/database-design.md "Known gap").
