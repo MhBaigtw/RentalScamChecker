@@ -28,7 +28,14 @@ from tests.helpers import TEST_PEPPER
 pytestmark = pytest.mark.integration
 
 API_DIR = Path(__file__).resolve().parents[1]
-IS_WINDOWS = sys.platform == "win32"
+
+# Written as a platform check that mypy understands, so each OS only type-checks its own constants.
+if sys.platform == "win32":
+    CREATION_FLAGS = subprocess.CREATE_NEW_PROCESS_GROUP  # so CTRL_BREAK reaches only the worker
+    STOP_SIGNAL = signal.CTRL_BREAK_EVENT
+else:
+    CREATION_FLAGS = 0
+    STOP_SIGNAL = signal.SIGTERM
 
 
 def job_status(sf: sessionmaker[Session], key: str) -> str:
@@ -69,7 +76,6 @@ def test_stop_signal_lets_the_running_job_finish(
         "WORKER_CONCURRENCY": "1",
         "WORKER_POLL_INTERVAL_SECONDS": "0.1",
     }
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
     proc = subprocess.Popen(
         [sys.executable, "-m", "rentalscamchecker.worker"],
         cwd=API_DIR,
@@ -77,7 +83,7 @@ def test_stop_signal_lets_the_running_job_finish(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        creationflags=flags,
+        creationflags=CREATION_FLAGS,
     )
     signal_key = signal_job_key(check_id, "stub", "1")
     try:
@@ -87,7 +93,7 @@ def test_stop_signal_lets_the_running_job_finish(
             assert proc.poll() is None, proc.stdout.read() if proc.stdout else ""
             time.sleep(0.05)
 
-        proc.send_signal(signal.CTRL_BREAK_EVENT if IS_WINDOWS else signal.SIGTERM)
+        proc.send_signal(STOP_SIGNAL)
         output, _ = proc.communicate(timeout=30)
     finally:
         if proc.poll() is None:
