@@ -106,12 +106,14 @@ def test_check_runs_both_signals_and_the_report_shows_their_evidence(
 
     price = by_name["price_vs_market"]
     assert (price["status"], price["severity"]) == ("ok", "high")
-    assert {k: price["evidence"][k] for k in ("reference_rent_cents", "survey_year", "cma")} == {
-        "reference_rent_cents": 240000,
+    keys = ("reference_rent_cents", "survey_year", "cma", "rent_basis", "percent_below_reference")
+    assert {k: price["evidence"][k] for k in keys} == {
+        "reference_rent_cents": 260000,
         "survey_year": 2025,
         "cma": "Toronto",
+        "rent_basis": "vacant_units",
+        "percent_below_reference": 57.7,
     }
-    assert price["evidence"]["percent_below_reference"] == 54.2
 
     address = by_name["address_sanity"]
     assert (address["status"], address["severity"]) == ("ok", "none")

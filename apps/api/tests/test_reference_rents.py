@@ -48,7 +48,7 @@ def test_bedroom_bucket_follows_cmhc(bedrooms: int, bucket: int) -> None:
 def test_read_csv_parses_published_and_suppressed_rows() -> None:
     rows = read_csv(FIXTURE)
 
-    assert len(rows) == 12
+    assert len(rows) == 31
     caledon = next(r for r in rows if r["geography_name"] == "Caledon")
     assert (caledon["avg_rent_cents"], caledon["reliability"]) == (None, None)
 
@@ -82,44 +82,66 @@ def test_loading_twice_does_not_duplicate(loaded: sessionmaker[Session]) -> None
     with loaded.begin() as s:
         load_rows(s, read_csv(FIXTURE))
     with loaded() as s:
-        assert s.execute(sa.text("SELECT count(*) FROM reference_rents")).scalar_one() == 12
+        assert s.execute(sa.text("SELECT count(*) FROM reference_rents")).scalar_one() == 31
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("city", "bedrooms", "expected"),
     [
-        # The municipality's own, newest figure (2025 beats 2024).
-        ("Oakville", 2, (240000, "municipality", "Oakville", 2025, "b")),
-        ("City of Oakville, ON", 2, (240000, "municipality", "Oakville", 2025, "b")),
-        ("Oakville", 4, (250000, "municipality", "Oakville", 2025, "b")),  # 3+ bucket
-        ("Mississauga", 1, (170000, "municipality", "Mississauga", 2025, "a")),
-        ("North York", 1, (190000, "municipality", "Toronto", 2025, "a")),
-        # Suppressed (**) municipal value -> the CMA's figure.
-        ("Caledon", 2, (200000, "cma", "Toronto", 2025, "a")),
-        # Reliability d ("use with caution") -> the CMA's figure.
-        ("Milton", 2, (200000, "cma", "Toronto", 2025, "a")),
+        # Step 1: the municipality's vacant-unit figure; newest survey (2025 beats 2024).
+        ("Oakville", 2, (260000, "municipality", "vacant_units", "Oakville", 2025, "b")),
+        (
+            "City of Oakville, ON",
+            2,
+            (260000, "municipality", "vacant_units", "Oakville", 2025, "b"),
+        ),
+        ("Mississauga", 1, (200000, "municipality", "vacant_units", "Mississauga", 2025, "a")),
+        # Step 2: the CMA's vacant figure beats the municipality's all-units figure.
+        ("Oakville", 4, (280000, "cma", "vacant_units", "Toronto", 2025, "a")),  # 3+ bucket
+        ("Oakville", 1, (195000, "cma", "vacant_units", "Toronto", 2025, "a")),  # no own row
+        ("North York", 1, (195000, "cma", "vacant_units", "Toronto", 2025, "a")),  # own is "d"
+        ("Caledon", 2, (250000, "cma", "vacant_units", "Toronto", 2025, "a")),  # suppressed
+        ("Milton", 2, (250000, "cma", "vacant_units", "Toronto", 2025, "a")),
+        # Step 3: no vacant figure anywhere -> the municipality's all-units figure.
+        ("Hamilton", 2, (150000, "municipality", "all_units", "Hamilton", 2025, "a")),
+        # Step 4: only the CMA's all-units figure is usable.
+        ("Hamilton", 1, (140000, "cma", "all_units", "Hamilton", 2025, "a")),
     ],
 )
-def test_find_reference(
+def test_find_reference_fallback_order(
     loaded: sessionmaker[Session], city: str, bedrooms: int, expected: tuple[object, ...]
 ) -> None:
     with loaded() as s:
         ref = find_reference(s, city, bedrooms)
 
     assert ref is not None
-    assert (ref.rent_cents, ref.level, ref.geography_name, ref.survey_year, ref.reliability) == (
-        expected
+    got = (
+        ref.rent_cents,
+        ref.level,
+        ref.rent_basis,
+        ref.geography_name,
+        ref.survey_year,
+        ref.reliability,
     )
-    assert ref.cma_name == "Toronto"
+    assert got == expected
+
+
+@pytest.mark.integration
+def test_reference_records_the_cmhc_row_it_came_from(loaded: sessionmaker[Session]) -> None:
+    with loaded() as s:
+        ref = find_reference(s, "Oakville", 2)
+
+    assert ref is not None
+    assert ref.source_geography == "Zone 23 - Oakville"
+    assert ref.source_url == "https://example.invalid/oakville-vacant_units"
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
     ("city", "bedrooms"),
     [
-        ("Burlington", 3),  # suppressed, and its CMA (Hamilton) isn't in the data
-        ("Oakville", 1),  # no row for this bucket at all
+        ("Burlington", 3),  # suppressed everywhere, municipality and CMA, both bases
         ("Kingston", 2),  # city not in the dataset
     ],
 )

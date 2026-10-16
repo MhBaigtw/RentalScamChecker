@@ -1,8 +1,9 @@
 """M3: reference_rents by geography level; geocode_cache; rate_limits.
 
 reference_rents was created in 0002 with a single `cma` column but never loaded. It is dropped and
-re-created with geography levels (CMA or municipality/CSD), CMHC reliability codes, the survey
-month and the source URL (ED-021). The upgrade refuses to run if the old table has any rows.
+re-created with geography levels (CMA or municipality/CSD), the CMHC row each value came from,
+the rent basis (vacant units / all units), CMHC reliability codes, the survey month and the source
+URL (ED-021). The upgrade refuses to run if the old table has any rows.
 
 Revision ID: 0005_reference_rents_geocoding
 Revises: 0004_job_queue_indexes
@@ -34,6 +35,8 @@ def upgrade() -> None:
         sa.Column("geography_code", sa.Text(), nullable=False),
         sa.Column("geography_name", sa.Text(), nullable=False),
         sa.Column("cma_name", sa.Text(), nullable=False),
+        sa.Column("source_geography", sa.Text(), nullable=False),
+        sa.Column("rent_basis", sa.Text(), nullable=False),
         sa.Column("bedrooms", sa.SmallInteger(), nullable=False),
         sa.Column("avg_rent_cents", sa.Integer(), nullable=True),
         sa.Column("reliability", sa.Text(), nullable=True),
@@ -43,6 +46,10 @@ def upgrade() -> None:
         sa.Column("source_url", sa.Text(), nullable=False),
         sa.CheckConstraint(
             "geography_type IN ('cma', 'csd')", name=op.f("ck_reference_rents_geography_type")
+        ),
+        sa.CheckConstraint(
+            "rent_basis IN ('vacant_units', 'all_units')",
+            name=op.f("ck_reference_rents_rent_basis"),
         ),
         sa.CheckConstraint(
             "bedrooms BETWEEN 0 AND 3", name=op.f("ck_reference_rents_bedrooms_range")
@@ -61,10 +68,11 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "geography_type",
             "geography_code",
+            "rent_basis",
             "bedrooms",
             "survey_year",
             "survey_month",
-            name="uq_reference_rents_geography_bedrooms_survey",
+            name="uq_reference_rents_geography_basis_bedrooms_survey",
         ),
     )
     op.create_table(

@@ -183,6 +183,7 @@ def build_worker(settings: Settings, session_factory: sessionmaker[Session]) -> 
         backoff_base_seconds=settings.job_backoff_base_seconds,
         backoff_max_seconds=settings.job_backoff_max_seconds,
         job_timeout_seconds=settings.job_timeout_seconds,
+        heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
     )
     handlers = build_handlers(session_factory, enabled_signals(settings, session_factory), settings)
     return Worker(session_factory, handlers, config)
@@ -204,6 +205,7 @@ def _load_check_input(session: Session, check_id: uuid.UUID) -> CheckInput:
         address_text=check.address_text,
         city=check.city,
         submitted_url=check.submitted_url,
+        unit_type=check.unit_type,
     )
 
 

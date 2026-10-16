@@ -158,3 +158,17 @@ def test_different_number_in_text_is_kept_alongside_the_field() -> None:
         Contact("phone", "+14165550123", "field"),
         Contact("phone", "+19055550142", "text"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [(None, "whole_unit"), ("", "whole_unit"), ("room", "room"), (" Basement ", "basement")],
+)
+def test_unit_type_defaults_to_whole_unit(typed: str | None, expected: str) -> None:
+    assert validate_submission(replace(VALID, unit_type=typed), "CA").unit_type == expected
+
+
+def test_unknown_unit_type_is_rejected() -> None:
+    assert invalid_fields(replace(VALID, unit_type="shared")) == {
+        "unit_type": "Must be one of: whole_unit, room, basement."
+    }

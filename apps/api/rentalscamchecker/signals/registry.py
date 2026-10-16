@@ -49,6 +49,8 @@ def _address_sanity(settings: Settings, sessions: sessionmaker[Session]) -> Sign
         base_url=settings.nominatim_base_url,
         min_interval_seconds=settings.nominatim_min_interval_seconds,
         timeout_seconds=settings.geocoder_timeout_seconds,
+        connect_timeout_seconds=settings.geocoder_connect_timeout_seconds,
+        lock_wait_seconds=settings.geocoder_lock_wait_seconds,
     )
     return AddressSanitySignal(geocoder)
 

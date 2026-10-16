@@ -52,8 +52,17 @@ class Settings(BaseSettings):
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
     # Policy: an absolute maximum of 1 request per second, across all our workers.
     nominatim_min_interval_seconds: float = Field(default=1.0, ge=1.0)
-    # Per-request network timeout; well below JOB_TIMEOUT_SECONDS.
+    # HTTP timeouts for Nominatim. httpx applies each per phase (connect; each read), not as a
+    # total, so the worst case is the sum; see _external_calls_fit_in_job_timeout.
+    geocoder_connect_timeout_seconds: float = Field(default=5.0, gt=0)
     geocoder_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Longest wait for our turn at the Nominatim rate limit (a Postgres lock_timeout).
+    geocoder_lock_wait_seconds: float = Field(default=15.0, gt=0)
+
+    # --- Internal endpoints ---
+    # Bearer token for GET /internal/metrics. If unset, the endpoint is open in development/test
+    # and disabled in production.
+    internal_metrics_token: SecretStr | None = None
 
     # --- Job queue and worker (M2, ED-002) ---
     job_max_attempts: int = Field(default=5, ge=1)
@@ -69,6 +78,8 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(default=2, ge=1)
     # How long an idle worker thread waits before polling the queue again.
     worker_poll_interval_seconds: float = 1.0
+    # How often each worker process writes its counters for /internal/metrics.
+    worker_heartbeat_interval_seconds: float = Field(default=5.0, gt=0)
 
     @model_validator(mode="after")
     def _timeout_below_lease(self) -> "Settings":
@@ -76,6 +87,25 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds}) must be > 0 and less than "
                 f"JOB_LEASE_SECONDS ({self.job_lease_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _external_calls_fit_in_job_timeout(self) -> "Settings":
+        """Every external call must give up on its own before the job timeout (ED-017), so a
+        slow service fails the attempt cleanly instead of leaving an abandoned thread behind.
+        Add each new client's worst case here (M4: the Anthropic API)."""
+        geocoder_worst_case = (
+            self.geocoder_lock_wait_seconds
+            + self.nominatim_min_interval_seconds
+            + self.geocoder_connect_timeout_seconds
+            + self.geocoder_timeout_seconds
+        )
+        if geocoder_worst_case >= self.job_timeout_seconds:
+            raise ValueError(
+                f"geocoder worst case ({geocoder_worst_case:g} s = lock wait + rate-limit interval "
+                f"+ connect + read timeouts) must be below JOB_TIMEOUT_SECONDS "
+                f"({self.job_timeout_seconds:g} s)"
             )
         return self
 

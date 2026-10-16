@@ -149,6 +149,7 @@ def test_check_with_three_photos_is_created_and_read_back(
         "listing_text": FIELDS["listing_text"],
         "rent_cents": 185_000,
         "bedrooms": 2,
+        "unit_type": "whole_unit",
         "address_text": "1430 Trafalgar Rd",
         "city": "Oakville",
     }

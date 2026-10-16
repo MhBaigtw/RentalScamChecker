@@ -1,5 +1,10 @@
 """price_vs_market: compare the asking rent with CMHC's average rent for the same city and
-bedroom count (SPEC 4). A deterministic rule on public data; no model, no network (ED-021)."""
+bedroom count (SPEC 4). A deterministic rule on public data; no model, no network (ED-021).
+
+Baseline, in order of preference: the vacant-unit average (what landlords ask for empty units,
+closest to what a new tenant pays), then the overall average of all units. Rooms are skipped:
+CMHC averages describe whole units only.
+"""
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -8,9 +13,17 @@ from rentalscamchecker.signals.base import CheckInput, Severity, SignalContext, 
 
 MONTH_NAMES = {4: "April", 10: "October"}
 BEDROOM_LABELS = {0: "studio", 1: "1-bedroom", 2: "2-bedroom", 3: "3+ bedroom"}
+BASELINE_LABELS = {
+    "vacant_units": "average asking rent for vacant",
+    "all_units": "average rent (all units, including long-time tenants) for",
+}
 SURVEY_CAVEAT = (
-    "CMHC's average covers purpose-built rental buildings; basements, rooms and condos often rent "
-    "for a different price, so a lower rent on its own proves nothing."
+    "CMHC's figures cover purpose-built rental buildings; condos and basement apartments can "
+    "rent for a different price, so a lower rent on its own proves nothing."
+)
+BASEMENT_CAVEAT = (
+    "This listing is a basement apartment. Basements are not in CMHC's survey and often rent "
+    "for less than these averages, so read this comparison with care."
 )
 
 
@@ -30,24 +43,29 @@ class PriceVsMarketSignal:
         self._high = high_below_percent
 
     def run(self, check: CheckInput, ctx: SignalContext) -> SignalResult:
+        bedroom_type = BEDROOM_LABELS[bedroom_bucket(check.bedrooms)]
+        if check.unit_type == "room":
+            return self._skipped(
+                {"city": check.city, "unit_type": "room", "reason": "room_not_comparable"},
+                "This listing is a room in a shared place. CMHC's rent data covers whole units "
+                "only, so the price wasn't compared with a local average.",
+                "Compare the price with other rooms offered nearby. Be careful if it's much "
+                "cheaper than all of them, and don't pay before seeing the room.",
+            )
         with self._sessions() as session:
             reference = find_reference(session, check.city, check.bedrooms)
-        label = BEDROOM_LABELS[bedroom_bucket(check.bedrooms)]
         if reference is None:
-            return SignalResult(
-                name=self.name,
-                version=self.version,
-                status="skipped",
-                severity=None,
-                evidence={"city": check.city, "unit_type": label, "reason": "no_reference_data"},
-                explanation=(
-                    f"We don't have CMHC reference rents for a {label} in {check.city} yet, so "
-                    "the price wasn't compared with the local average."
-                ),
-                next_step=(
-                    "Compare the price with several similar listings in the same area. Be careful "
-                    "if it's much cheaper than all of them."
-                ),
+            return self._skipped(
+                {
+                    "city": check.city,
+                    "bedroom_type": bedroom_type,
+                    "unit_type": check.unit_type,
+                    "reason": "no_reference_data",
+                },
+                f"We don't have CMHC reference rents for a {bedroom_type} in {check.city} yet, "
+                "so the price wasn't compared with the local average.",
+                "Compare the price with several similar listings in the same area. Be careful "
+                "if it's much cheaper than all of them.",
             )
         percent_below = (reference.rent_cents - check.rent_cents) / reference.rent_cents * 100
         severity = self._severity(percent_below)
@@ -56,9 +74,22 @@ class PriceVsMarketSignal:
             version=self.version,
             status="ok",
             severity=severity,
-            evidence=_evidence(check, reference, label, percent_below),
-            explanation=_explanation(check, reference, label, percent_below, severity),
+            evidence=_evidence(check, reference, bedroom_type, percent_below),
+            explanation=_explanation(check, reference, bedroom_type, percent_below, severity),
             next_step=_next_step(severity),
+        )
+
+    def _skipped(
+        self, evidence: dict[str, object], explanation: str, next_step: str
+    ) -> SignalResult:
+        return SignalResult(
+            name=self.name,
+            version=self.version,
+            status="skipped",
+            severity=None,
+            evidence=evidence,
+            explanation=explanation,
+            next_step=next_step,
         )
 
     def _severity(self, percent_below: float) -> Severity:
@@ -80,8 +111,13 @@ def _place(reference: Reference) -> str:
     return reference.geography_name
 
 
+def _baseline(reference: Reference, bedroom_type: str) -> str:
+    """E.g. "average asking rent for vacant 2-bedroom units in Oakville"."""
+    return f"{BASELINE_LABELS[reference.rent_basis]} {bedroom_type} units in {_place(reference)}"
+
+
 def _evidence(
-    check: CheckInput, reference: Reference, label: str, percent_below: float
+    check: CheckInput, reference: Reference, bedroom_type: str, percent_below: float
 ) -> dict[str, object]:
     # No thresholds here: evidence is shown to users, and SPEC 10 says not to expose rule
     # thresholds that someone could tune a listing against.
@@ -89,10 +125,15 @@ def _evidence(
         "listing_rent_cents": check.rent_cents,
         "reference_rent_cents": reference.rent_cents,
         "percent_below_reference": round(percent_below, 1),
-        "unit_type": label,
+        "bedroom_type": bedroom_type,
+        "unit_type": check.unit_type,
         "city": check.city,
+        # Which baseline was used (ED-021): vacant_units preferred, all_units as fallback.
+        "rent_basis": reference.rent_basis,
+        "baseline": _baseline(reference, bedroom_type),
         "reference_geography": reference.geography_name,
         "reference_level": reference.level,
+        "cmhc_geography": reference.source_geography,
         "cma": reference.cma_name,
         "survey": _survey(reference),
         "survey_year": reference.survey_year,
@@ -112,22 +153,30 @@ def _dollars(cents: int) -> str:
 
 
 def _explanation(
-    check: CheckInput, reference: Reference, label: str, percent_below: float, severity: Severity
+    check: CheckInput,
+    reference: Reference,
+    bedroom_type: str,
+    percent_below: float,
+    severity: Severity,
 ) -> str:
     compared = (
         f"We compared the rent ({_dollars(check.rent_cents)}/month) with CMHC's "
-        f"{_survey(reference)} average for a {label} in {_place(reference)} "
+        f"{_survey(reference)} {_baseline(reference, bedroom_type)} "
         f"({_dollars(reference.rent_cents)}/month)."
     )
     if percent_below <= 0:
-        return f"{compared} The rent is {abs(percent_below):.0f}% above that average."
-    found = f"{compared} The rent is {percent_below:.0f}% below that average."
-    if severity == "none":
-        return found
-    return (
-        f"{found} Rents far below the local average are a common feature of listings that turn "
-        f"out not to be what they claim. {SURVEY_CAVEAT}"
-    )
+        parts = [compared, f"The rent is {abs(percent_below):.0f}% above that average."]
+    else:
+        parts = [compared, f"The rent is {percent_below:.0f}% below that average."]
+        if severity != "none":
+            parts.append(
+                "Rents far below the local average are a common feature of listings that turn "
+                "out not to be what they claim."
+            )
+            parts.append(SURVEY_CAVEAT)
+    if check.unit_type == "basement":
+        parts.append(BASEMENT_CAVEAT)
+    return " ".join(parts)
 
 
 def _next_step(severity: Severity) -> str:

@@ -31,11 +31,15 @@ CITY_ALIASES = {
     "east york": "toronto",
     "york": "toronto",
 }
+# Baselines in order of preference (ED-021): what new tenants are asked first.
+RENT_BASIS_ORDER = ("vacant_units", "all_units")
 _REQUIRED = (
     "geography_type",
     "geography_code",
     "geography_name",
     "cma_name",
+    "source_geography",
+    "rent_basis",
     "bedrooms",
     "avg_rent_cents",
     "reliability",
@@ -53,6 +57,10 @@ class Reference:
     geography_name: str
     # "municipality" when the city's own figure was used, "cma" for the metropolitan fallback.
     level: str
+    # "vacant_units" (asking rents of empty units) or "all_units" (overall average).
+    rent_basis: str
+    # The CMHC table row the value was read from, e.g. "Zone 29 - Milton/Halton Hills".
+    source_geography: str
     cma_name: str
     survey_year: int
     survey_month: int
@@ -100,6 +108,8 @@ def _parse_row(raw: dict[str, str]) -> dict[str, object]:
         "geography_code": raw["geography_code"],
         "geography_name": raw["geography_name"],
         "cma_name": raw["cma_name"],
+        "source_geography": raw["source_geography"],
+        "rent_basis": raw["rent_basis"],
         "bedrooms": int(raw["bedrooms"]),
         "avg_rent_cents": int(rent) if rent else None,
         "reliability": reliability,
@@ -116,12 +126,13 @@ def load_rows(session: Session, rows: list[dict[str, object]]) -> int:
         stmt = insert(ReferenceRent).values(**row)
         session.execute(
             stmt.on_conflict_do_update(
-                constraint="uq_reference_rents_geography_bedrooms_survey",
+                constraint="uq_reference_rents_geography_basis_bedrooms_survey",
                 set_={
                     k: stmt.excluded[k]
                     for k in (
                         "geography_name",
                         "cma_name",
+                        "source_geography",
                         "avg_rent_cents",
                         "reliability",
                         "source",
@@ -134,31 +145,52 @@ def load_rows(session: Session, rows: list[dict[str, object]]) -> int:
 
 
 def find_reference(session: Session, city: str, bedrooms: int) -> Reference | None:
-    """The newest usable reference rent for this city and bedroom count.
+    """The newest usable reference rent for this city and bedroom count (ED-021).
 
-    1. The municipality's own figure, if published with reliability a, b or c.
-    2. Otherwise the figure for the CMA the municipality belongs to (same rules).
-    3. None if the city isn't in the dataset, or neither figure is usable.
+    Tried in this order; the first figure published with reliability a, b or c wins:
+    1. the municipality's vacant-unit average;
+    2. its CMA's vacant-unit average;
+    3. the municipality's all-units average;
+    4. its CMA's all-units average.
+    None if the city isn't in the dataset or nothing usable is published.
     """
     bucket = bedroom_bucket(bedrooms)
     name = normalize_city(city)
-    own = _newest(session, "csd", name, bucket)
-    if own is None:
+    cma_name = _cma_of(session, name)
+    if cma_name is None:
         return None
-    if own.avg_rent_cents is not None and own.reliability in USABLE_RELIABILITY:
-        return _reference(own, "municipality")
-    cma = _newest(session, "cma", own.cma_name.casefold(), bucket)
-    if cma is not None and cma.avg_rent_cents is not None and cma.reliability in USABLE_RELIABILITY:
-        return _reference(cma, "cma")
+    for basis in RENT_BASIS_ORDER:
+        for geography_type, geography, level in (
+            ("csd", name, "municipality"),
+            ("cma", cma_name.casefold(), "cma"),
+        ):
+            row = _newest(session, geography_type, geography, basis, bucket)
+            if row is not None and row.avg_rent_cents is not None:
+                if row.reliability in USABLE_RELIABILITY:
+                    return _reference(row, level)
     return None
 
 
-def _newest(session: Session, geography_type: str, name: str, bucket: int) -> ReferenceRent | None:
+def _cma_of(session: Session, city: str) -> str | None:
+    """The CMA a municipality belongs to, from any of its rows (suppressed rows count)."""
+    return session.scalars(
+        select(ReferenceRent.cma_name)
+        .where(
+            ReferenceRent.geography_type == "csd", func.lower(ReferenceRent.geography_name) == city
+        )
+        .limit(1)
+    ).first()
+
+
+def _newest(
+    session: Session, geography_type: str, name: str, basis: str, bucket: int
+) -> ReferenceRent | None:
     return session.scalars(
         select(ReferenceRent)
         .where(
             ReferenceRent.geography_type == geography_type,
             func.lower(ReferenceRent.geography_name) == name,
+            ReferenceRent.rent_basis == basis,
             ReferenceRent.bedrooms == bucket,
         )
         .order_by(ReferenceRent.survey_year.desc(), ReferenceRent.survey_month.desc())
@@ -173,6 +205,8 @@ def _reference(row: ReferenceRent, level: str) -> Reference:
         reliability=row.reliability,
         geography_name=row.geography_name,
         level=level,
+        rent_basis=row.rent_basis,
+        source_geography=row.source_geography,
         cma_name=row.cma_name,
         survey_year=row.survey_year,
         survey_month=row.survey_month,

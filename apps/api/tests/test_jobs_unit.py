@@ -59,3 +59,21 @@ def test_default_job_timeout_is_below_the_default_lease() -> None:
     settings = make_settings(UNREACHABLE_DB_URL)
 
     assert (settings.job_timeout_seconds, settings.job_lease_seconds) == (45.0, 60.0)
+
+
+def test_geocoder_worst_case_must_fit_inside_the_job_timeout() -> None:
+    # lock wait 30 + interval 1 + connect 5 + read 10 = 46 s > 45 s job timeout.
+    with pytest.raises(ValueError, match="geocoder worst case"):
+        make_settings(UNREACHABLE_DB_URL, geocoder_lock_wait_seconds=30)
+
+
+def test_default_geocoder_budget_fits() -> None:
+    settings = make_settings(UNREACHABLE_DB_URL)
+
+    worst = (
+        settings.geocoder_lock_wait_seconds
+        + settings.nominatim_min_interval_seconds
+        + settings.geocoder_connect_timeout_seconds
+        + settings.geocoder_timeout_seconds
+    )
+    assert worst == 31 < settings.job_timeout_seconds

@@ -46,9 +46,12 @@ class RawSubmission:
     submitted_url: str | None = None
     contact_phone: str | None = None
     contact_email: str | None = None
+    unit_type: str | None = None
 
 
 ContactSource = Literal["field", "text"]
+UnitType = Literal["whole_unit", "room", "basement"]
+UNIT_TYPE_VALUES: tuple[UnitType, ...] = ("whole_unit", "room", "basement")
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class ValidSubmission:
     listing_text: str
     rent_cents: int
     bedrooms: int
+    unit_type: UnitType
     address_text: str
     city: str
     submitted_url: str | None
@@ -87,6 +91,7 @@ def validate_submission(raw: RawSubmission, phone_region: str) -> ValidSubmissio
     listing_text = run("listing_text", _required_text(MAX_LISTING_TEXT), raw.listing_text)
     rent_cents = run("monthly_rent", _rent_cents, raw.monthly_rent)
     bedrooms = run("bedrooms", _bedrooms, raw.bedrooms)
+    unit_type = run("unit_type", _unit_type, raw.unit_type)
     address_text = run("address_text", _required_text(MAX_ADDRESS, min_length=3), raw.address_text)
     city = run("city", _required_text(MAX_CITY, min_length=2), raw.city)
     submitted_url = run("submitted_url", _optional_url, raw.submitted_url)
@@ -97,7 +102,7 @@ def validate_submission(raw: RawSubmission, phone_region: str) -> ValidSubmissio
         raise InvalidSubmission(errors)
     # All required validators returned values (they raise otherwise); assert for the type checker.
     assert listing_text is not None and rent_cents is not None and bedrooms is not None  # noqa: S101
-    assert address_text is not None and city is not None  # noqa: S101
+    assert address_text is not None and city is not None and unit_type is not None  # noqa: S101
     extracted = extract_contacts(listing_text, phone_region)
     contacts = _merge_contacts(
         field_phone=phone,
@@ -109,6 +114,7 @@ def validate_submission(raw: RawSubmission, phone_region: str) -> ValidSubmissio
         listing_text=extracted.redacted,
         rent_cents=rent_cents,
         bedrooms=bedrooms,
+        unit_type=unit_type,
         address_text=address_text,
         city=city,
         submitted_url=submitted_url,
@@ -189,6 +195,17 @@ def _bedrooms(field: str, value: str | None) -> int:
     if not 0 <= count <= MAX_BEDROOMS:
         raise FieldError(field, f"Must be between 0 and {MAX_BEDROOMS}.")
     return count
+
+
+def _unit_type(field: str, value: str | None) -> UnitType:
+    """Optional; a whole unit unless the user says it's a room or a basement apartment."""
+    if value is None or _blank(value):
+        return "whole_unit"
+    cleaned = value.strip().lower()
+    for allowed in UNIT_TYPE_VALUES:
+        if cleaned == allowed:
+            return allowed
+    raise FieldError(field, f"Must be one of: {', '.join(UNIT_TYPE_VALUES)}.")
 
 
 def _optional_url(field: str, value: str | None) -> str | None:

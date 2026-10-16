@@ -59,13 +59,18 @@ class NominatimGeocoder:
         base_url: str,
         min_interval_seconds: float,
         timeout_seconds: float,
+        connect_timeout_seconds: float = 5.0,
+        lock_wait_seconds: float = 15.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._sessions = session_factory
         self._min_interval = min_interval_seconds
+        self._lock_wait_ms = int(lock_wait_seconds * 1000)
         self._client = httpx.Client(
             base_url=base_url,
-            timeout=timeout_seconds,
+            # httpx timeouts are per phase: connect, then each read/write. Settings checks that
+            # their sum plus the lock wait stays below the job timeout.
+            timeout=httpx.Timeout(timeout_seconds, connect=connect_timeout_seconds),
             headers={"User-Agent": f"RentalScamChecker/0.1 (+{APP_URL}; {contact_email})"},
             transport=transport,
         )
@@ -90,8 +95,8 @@ class NominatimGeocoder:
 
     def _fetch_rate_limited(self, key: str) -> list[dict[str, Any]]:
         with self._sessions.begin() as session:
-            # Fail rather than queue forever behind other geocoding calls (job timeout is 45 s).
-            session.execute(text("SET LOCAL lock_timeout = '20s'"))
+            # Fail rather than queue past the job timeout behind other geocoding calls.
+            session.execute(text(f"SET LOCAL lock_timeout = {self._lock_wait_ms}"))
             session.execute(
                 insert(RateLimit)
                 .values(name=PROVIDER, last_request_at=func.to_timestamp(0))

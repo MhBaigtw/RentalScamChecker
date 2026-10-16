@@ -358,3 +358,51 @@ def test_job_exceeding_the_timeout_is_failed_and_retried(
 def test_job_timeout_must_be_positive_and_below_the_lease(timeout: float) -> None:
     with pytest.raises(ValueError, match="less than the lease"):
         WorkerConfig(lease_seconds=30, job_timeout_seconds=timeout)
+
+
+class SlowJobZero(RecordingHandler):
+    """Job with payload n=0 runs for `sleep_seconds`; every other job returns at once."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        super().__init__()
+        self.sleep_seconds = sleep_seconds
+
+    def run(self, job: ClaimedJob) -> None:
+        with self._lock:
+            self.calls.append(job.id)
+        if job.payload["n"] == 0:
+            time.sleep(self.sleep_seconds)
+
+
+def test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """With ONE worker slot: job 0 overruns its 0.5 s timeout (its code runs for 3 s), and job 1
+    must still be processed straight away. The slot is freed at the timeout; only the abandoned
+    helper thread keeps running."""
+    add_jobs(session_factory, count=2)
+    handler = SlowJobZero(sleep_seconds=3.0)
+    config = WorkerConfig(
+        concurrency=1,
+        poll_interval_seconds=0.05,
+        lease_seconds=30,
+        job_timeout_seconds=0.5,
+        backoff_base_seconds=60,  # keep job 0 out of the way after its timeout
+    )
+    worker = make_worker(session_factory, handler, config)
+    thread = threading.Thread(target=worker.run)
+    started = time.monotonic()
+    thread.start()
+    try:
+        while job(session_factory, f"{KIND}:1").status != "done":
+            assert time.monotonic() - started < 2.5, "job 1 waited for the abandoned job 0"
+            time.sleep(0.05)
+        stats = worker.stats()
+        assert (stats.jobs_timed_out_total, stats.abandoned_threads_alive) == (1, 1)
+        assert stats.jobs_done_total == 1
+        assert job(session_factory).status == "failed"  # job 0: retryable, waiting for backoff
+    finally:
+        worker.request_stop()
+        thread.join(timeout=10)
+    time.sleep(3.0)  # job 0's helper thread finishes its sleep
+    assert worker.stats().abandoned_threads_alive == 0

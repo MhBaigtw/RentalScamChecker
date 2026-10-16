@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 HTTP_ERROR_CODES = {
+    401: "unauthorized",
     404: "not_found",
     405: "method_not_allowed",
     413: "payload_too_large",
