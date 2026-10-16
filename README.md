@@ -1,0 +1,69 @@
+# RentalScamChecker
+
+A rental listing risk checker for students in Canada. Submit a listing; background jobs check the
+price against public rent data, look for reused photos, extract red-flag language, and link reused
+contacts across earlier submissions. The result is an explainable risk report, never a verdict.
+
+Status: Milestone 0 (foundation). The API serves `GET /health`; the web home page shows it.
+
+- `CLAUDE.md`: working rules for Claude Code (read first)
+- `SPEC.md`: product and technical specification
+- `TASKS.md`: milestones with "done when" criteria
+- `docs/`: living documentation and the decision log
+
+## Layout
+
+```
+apps/api/   FastAPI app + (later) worker, Python 3.12, SQLAlchemy 2, Alembic
+apps/web/   Next.js (App Router, TypeScript strict, Tailwind)
+docs/       architecture, decisions, testing, deployment, ...
+docker-compose.yml   local Postgres 16 + pgvector
+```
+
+## Local setup
+
+Prerequisites: Python 3.12, Node 24+, Git, Docker Desktop. Windows commands shown; on
+macOS/Linux use `python3.12` and `.venv/bin/` instead of `py -3.12` and `.venv\Scripts\`.
+
+Local ports: Postgres **5434**, API **8100**, web **3100**.
+
+Windows: clone to a short path (e.g. `C:\Users\<you>\dev\`). If Windows long-path support is
+off, `pip install` fails inside deeply nested folders (see docs/problems-and-solutions.md, P-004).
+
+```powershell
+git clone https://github.com/MhBaigtw/RentalScamChecker.git
+cd RentalScamChecker
+copy .env.example .env
+
+# 1. Database
+docker compose up -d --wait
+
+# 2. API
+cd apps\api
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m pytest
+.venv\Scripts\python.exe -m rentalscamchecker      # serves http://127.0.0.1:8100
+cd ..\..
+
+# 3. Web (second terminal)
+cd apps\web
+npm ci
+npm run dev                                        # serves http://localhost:3100
+
+# 4. Pre-commit hooks (once, from the repo root)
+apps\api\.venv\Scripts\pre-commit.exe install
+```
+
+Check it works: `curl http://127.0.0.1:8100/health` returns `{"status":"ok","database":"ok"}`, and
+http://localhost:3100 shows "All systems working". Stop Postgres (`docker compose stop`) and the
+endpoint returns HTTP 503 with `{"error": {"code": "database_unavailable", ...}}`.
+
+On Windows, run Python only through the venv; bare `python` may not be 3.12 (on the dev machine
+it resolves to Cygwin). More detail, including the no-Docker fallback:
+[docs/deployment.md](docs/deployment.md). How to run each check: [docs/testing.md](docs/testing.md).
+
+## Limitations
+
+Pre-alpha. No risk checks are implemented yet; see TASKS.md for the plan.

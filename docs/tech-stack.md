@@ -1,0 +1,46 @@
+# Tech stack
+
+One line of "why" per dependency (CLAUDE.md rule). Versions are what M0 installed.
+
+## Infrastructure
+
+| What | Version | Why | Alternatives |
+|---|---|---|---|
+| PostgreSQL + pgvector (`pgvector/pgvector:pg16`) | 16.15 / 0.8.7 | All data, the job queue (ED-002) and image embeddings (M5) in one database | Separate vector DB (another service to run) |
+| Docker Compose | v5.1.0 | One command for the local DB; same image as CI | Native install (fallback, docs/deployment.md) |
+| GitHub Actions | n/a | CI next to the repo, Postgres as a service container | Other CI services |
+
+## API (`apps/api`, Python 3.12)
+
+| Package | Pin | Why |
+|---|---|---|
+| fastapi | ~=0.143.2 | Typed HTTP framework with validation and OpenAPI out of the box |
+| uvicorn[standard] | ~=0.54.0 | ASGI server that runs FastAPI |
+| sqlalchemy | ~=2.1.4 | SQL toolkit/ORM; 2.x typed API; used by Alembic |
+| psycopg[binary] | ~=3.3.6 | Postgres driver (v3); binary wheel avoids a C build on Windows |
+| alembic | ~=1.20.0 | Schema migrations for SQLAlchemy |
+| pydantic-settings | ~=2.16.0 | Typed settings from env vars / `.env` |
+| structlog | ~=26.1.0 | Structured JSON logs with context vars (request id / job id) |
+
+Dev: pytest (tests), httpx (FastAPI TestClient transport), ruff (lint + format), mypy (strict
+type checks), pre-commit (git hooks).
+
+Known: Starlette warns that using `httpx` with its TestClient is deprecated in favour of
+`httpx2`. Tests still pass; switch when FastAPI's docs recommend it.
+
+## Web (`apps/web`, Node 24)
+
+| Package | Version | Why |
+|---|---|---|
+| next | 16.4.2 | React framework, App Router, server components; matches existing experience (ED-003) |
+| react / react-dom | 19.3.0 | Required by Next |
+| tailwindcss (+ @tailwindcss/turbopack) | ^4 | Utility CSS; scaffolded by create-next-app |
+| typescript | ^5 | `strict: true` |
+| eslint + eslint-config-next | ^9 / 16.4.2 | Lint rules from Next.js |
+| vitest | ^5.0.5 | Fast unit tests for TS without a browser |
+| @types/node | ^24 | Matches the Node 24 runtime; vitest 5 requires ≥22 |
+
+Known: `npm audit` reports 5 high-severity findings, all one chain inside
+`eslint-config-next` → `fast-glob` → `micromatch` → `braces` (ReDoS). Dev-only lint tooling,
+not shipped to users. npm's suggested fix downgrades to `eslint-config-next@14`, which would be
+worse. Revisit in the M9 security pass. ESLint 9 is also flagged as deprecated upstream; same.

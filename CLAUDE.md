@@ -19,6 +19,9 @@ in depth and must be able to explain every decision in interviews. Write code he
   in docs/ instead of lecturing in chat.
 - Work one milestone at a time from TASKS.md. Do not start the next milestone until the
   current one's "Done when" checks pass.
+- Git: one branch and one PR per milestone (branch `mN-<short-name>`, PR titled
+  "MN: <name>"). Wait for CI to pass on the PR, then merge with a merge commit (no squash,
+  no rebase) to keep the history. Never force-push to `main`.
 - For every milestone:
   1. State what you are building (2 to 4 lines).
   2. Note any significant decision briefly and add it to docs/engineering-decisions.md.
