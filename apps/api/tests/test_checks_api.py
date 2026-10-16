@@ -154,7 +154,10 @@ def test_check_with_three_photos_is_created_and_read_back(
         (1, 80, 60),
         (2, 40, 40),
     ]
-    assert sorted(c["kind"] for c in body["contacts"]) == ["email", "phone"]
+    assert sorted((c["kind"], c["source"]) for c in body["contacts"]) == [
+        ("email", "field"),
+        ("phone", "field"),
+    ]
     assert body["signals"] == []
 
     stored = sorted((photo_dir / "checks" / check_id).iterdir())
@@ -165,13 +168,9 @@ def test_check_with_three_photos_is_created_and_read_back(
             assert len(img.getexif()) == 0
 
 
-@pytest.mark.integration
-def test_raw_contact_values_are_not_in_the_database(client: TestClient, engine: sa.Engine) -> None:
-    created = client.post("/checks", data=FIELDS, files=three_photos())
-    check_id = uuid.UUID(created.json()["check_id"])
-
+def rows_of_check(engine: sa.Engine, check_id: uuid.UUID) -> str:
+    """Every column of every row belonging to this check, as lowercased JSON text."""
     with engine.connect() as conn:
-        # Every column of every row belonging to this check, as JSON text.
         rows = conn.execute(
             sa.text(
                 """
@@ -184,21 +183,60 @@ def test_raw_contact_values_are_not_in_the_database(client: TestClient, engine: 
             ),
             {"id": check_id},
         ).scalars()
-        dump = "\n".join(rows).lower()
-        hashes: dict[str, bytes] = dict(
-            conn.execute(
-                sa.text("SELECT kind, hmac_hash FROM check_contacts WHERE check_id = :id"),
-                {"id": check_id},
-            ).all()
-        )
+        return "\n".join(rows).lower()
+
+
+def contact_rows(engine: sa.Engine, check_id: uuid.UUID) -> set[tuple[str, str, bytes]]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT kind, source, hmac_hash FROM check_contacts WHERE check_id = :id"),
+            {"id": check_id},
+        ).all()
+    return {(kind, source, bytes(h)) for kind, source, h in rows}
+
+
+@pytest.mark.integration
+def test_raw_contact_values_are_not_in_the_database(client: TestClient, engine: sa.Engine) -> None:
+    # Raw values in the fields AND, different ones, inside the listing text.
+    fields = {
+        **FIELDS,
+        "listing_text": "Nice unit. Text 647-555-0199 or write to Owner.Abroad@Mail.com.",
+    }
+    created = client.post("/checks", data=fields, files=three_photos())
+    check_id = uuid.UUID(created.json()["check_id"])
+
+    dump = rows_of_check(engine, check_id)
 
     assert dump.count(str(check_id)) >= 1  # sanity: the dump really has this check's rows
-    for needle in ["4165550123", "416) 555", "555-0123", "landlord.joe", "example.com"]:
+    for needle in [
+        "4165550123", "416) 555", "555-0123", "landlord.joe", "example.com",
+        "6475550199", "647-555", "555-0199", "owner.abroad", "mail.com",
+    ]:  # fmt: skip
         assert needle not in dump
+    assert "nice unit. text [phone] or write to [email]." in dump
 
     pepper = TEST_PEPPER.encode()
-    assert bytes(hashes["phone"]) == contact_hash("phone", "+14165550123", pepper)
-    assert bytes(hashes["email"]) == contact_hash("email", "landlord.joe@example.com", pepper)
+    assert contact_rows(engine, check_id) == {
+        ("phone", "field", contact_hash("phone", "+14165550123", pepper)),
+        ("email", "field", contact_hash("email", "landlord.joe@example.com", pepper)),
+        ("phone", "text", contact_hash("phone", "+16475550199", pepper)),
+        ("email", "text", contact_hash("email", "owner.abroad@mail.com", pepper)),
+    }
+
+
+@pytest.mark.integration
+def test_number_in_both_field_and_text_is_one_link(client: TestClient, engine: sa.Engine) -> None:
+    fields = {**FIELDS, "listing_text": "Call me at 416.555.0123 to book a viewing."}
+
+    created = client.post("/checks", data=fields, files=photos((20, 20)))
+    check_id = uuid.UUID(created.json()["check_id"])
+
+    phones = {row for row in contact_rows(engine, check_id) if row[0] == "phone"}
+    assert phones == {
+        ("phone", "field", contact_hash("phone", "+14165550123", TEST_PEPPER.encode()))
+    }
+    body = client.get(f"/checks/{check_id}").json()
+    assert body["listing"]["listing_text"] == "Call me at [phone] to book a viewing."
 
 
 @pytest.mark.integration

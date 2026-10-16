@@ -30,7 +30,7 @@ check has been accepted but not processed: from M2 on, the signals run in the ba
 
 | Field | Required | Rules |
 |---|---|---|
-| `listing_text` | yes | trimmed, 1 to 20 000 chars |
+| `listing_text` | yes | trimmed, 1 to 20 000 chars. Phone numbers and emails in it are extracted (linked like the contact fields) and replaced by `[phone]` / `[email]` before storing (ED-016) |
 | `monthly_rent` | yes | dollars; accepts `1850`, `1,850.00`, `$1850`; > 0, ≤ 20 000, ≤ 2 decimals; stored as cents |
 | `bedrooms` | yes | integer 0 to 10 (0 = studio) |
 | `address_text` | yes | 3 to 300 chars |
@@ -57,12 +57,13 @@ If the insert fails, the files just written are deleted.
   "listing": {"submitted_url": null, "listing_text": "…", "rent_cents": 165000, "bedrooms": 2,
               "address_text": "1430 Trafalgar Rd", "city": "Oakville"},
   "photos": [{"id": "…", "position": 0, "width": 640, "height": 480}],
-  "contacts": [{"kind": "phone"}, {"kind": "email"}],
+  "contacts": [{"kind": "phone", "source": "field"}, {"kind": "phone", "source": "text"}],
   "signals": []
 }
 ```
 
-Contacts expose only their kind: the hash is internal and the raw value no longer exists.
+Contacts expose only kind and source (`field` or `text`): the hash is internal and the raw value
+no longer exists. `listing.listing_text` is the redacted text.
 Photo bytes aren't served yet (the report UI in M7 decides whether it needs them).
 
 ## `GET /health`

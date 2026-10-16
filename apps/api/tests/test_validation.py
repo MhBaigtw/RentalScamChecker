@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from rentalscamchecker.checks.validation import (
+    Contact,
     InvalidSubmission,
     RawSubmission,
     validate_submission,
@@ -30,8 +31,7 @@ def test_valid_submission_is_cleaned() -> None:
     assert result.rent_cents == 185_000
     assert result.bedrooms == 2
     assert result.submitted_url is None
-    assert result.phone_e164 is None
-    assert result.email_normalized is None
+    assert result.contacts == []
 
 
 def test_contacts_are_normalized() -> None:
@@ -39,8 +39,10 @@ def test_contacts_are_normalized() -> None:
 
     result = validate_submission(raw, "CA")
 
-    assert result.phone_e164 == "+19055550199"
-    assert result.email_normalized == "a@b.ca"
+    assert result.contacts == [
+        Contact("phone", "+19055550199", "field"),
+        Contact("email", "a@b.ca", "field"),
+    ]
 
 
 def test_blank_optional_fields_become_none() -> None:
@@ -48,7 +50,7 @@ def test_blank_optional_fields_become_none() -> None:
 
     result = validate_submission(raw, "CA")
 
-    assert (result.submitted_url, result.phone_e164, result.email_normalized) == (None, None, None)
+    assert (result.submitted_url, result.contacts) == (None, [])
 
 
 def test_every_missing_required_field_is_reported_at_once() -> None:
@@ -117,3 +119,42 @@ def test_bad_contacts_are_reported_per_field() -> None:
         "contact_phone": "Not a valid phone number.",
         "contact_email": "Not a valid email address.",
     }
+
+
+def test_contacts_in_listing_text_are_extracted_and_redacted() -> None:
+    raw = replace(
+        VALID,
+        listing_text="Text me at 647-555-0199 or email Owner.Abroad@Mail.com. $1850/month.",
+    )
+
+    result = validate_submission(raw, "CA")
+
+    assert result.listing_text == "Text me at [phone] or email [email]. $1850/month."
+    assert result.contacts == [
+        Contact("phone", "+16475550199", "text"),
+        Contact("email", "owner.abroad@mail.com", "text"),
+    ]
+
+
+def test_same_number_in_field_and_text_gives_one_contact_from_the_field() -> None:
+    raw = replace(
+        VALID,
+        listing_text="Call (416) 555-0123, or 416.555.0123 after 6pm.",
+        contact_phone="+1 416 555 0123",
+    )
+
+    result = validate_submission(raw, "CA")
+
+    assert result.listing_text == "Call [phone], or [phone] after 6pm."
+    assert result.contacts == [Contact("phone", "+14165550123", "field")]
+
+
+def test_different_number_in_text_is_kept_alongside_the_field() -> None:
+    raw = replace(VALID, listing_text="Backup: 905-555-0142", contact_phone="416-555-0123")
+
+    result = validate_submission(raw, "CA")
+
+    assert result.contacts == [
+        Contact("phone", "+14165550123", "field"),
+        Contact("phone", "+19055550142", "text"),
+    ]

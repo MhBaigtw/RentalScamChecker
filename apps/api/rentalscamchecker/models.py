@@ -45,6 +45,7 @@ NAMING_CONVENTION = {
 CHECK_STATUSES = ("pending", "running", "complete")
 RISK_LEVELS = ("low", "some", "high", "incomplete")
 CONTACT_KINDS = ("phone", "email")
+CONTACT_SOURCES = ("field", "text")
 SIGNAL_STATUSES = ("ok", "skipped", "error")
 SEVERITIES = ("none", "low", "medium", "high")
 JOB_STATUSES = ("queued", "running", "done", "failed", "dead")
@@ -119,18 +120,25 @@ class CheckPhoto(Base):
 
 
 class CheckContact(Base):
-    """A phone number or email from a check, stored only as an HMAC (ED-004)."""
+    """A phone number or email from a check, stored only as an HMAC (ED-004, ED-016)."""
 
     __tablename__ = "check_contacts"
     __table_args__ = (
         CheckConstraint(_in("kind", CONTACT_KINDS), name="kind"),
+        CheckConstraint(_in("source", CONTACT_SOURCES), name="source"),
         CheckConstraint("octet_length(hmac_hash) = 32", name="hmac_hash_length"),
-        UniqueConstraint("check_id", "kind", name="uq_check_contacts_check_id_kind"),
+        # One row per distinct contact per check, however many times it appears.
+        UniqueConstraint(
+            "check_id", "kind", "hmac_hash", name="uq_check_contacts_check_id_kind_hmac_hash"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(Text)
+    # "field": the contact phone/email form fields. "text": found inside the listing text.
+    # If a value is in both, the single row says "field".
+    source: Mapped[str] = mapped_column(Text)
     hmac_hash: Mapped[bytes] = mapped_column(LargeBinary)
 
     check: Mapped[Check] = relationship(back_populates="contacts")

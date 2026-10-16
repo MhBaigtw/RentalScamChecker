@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from rentalscamchecker.checks.validation import ValidSubmission
-from rentalscamchecker.contacts import ContactKind, contact_hash
+from rentalscamchecker.contacts import contact_hash
 from rentalscamchecker.images import ProcessedPhoto
 from rentalscamchecker.models import Check, CheckContact, CheckPhoto
 from rentalscamchecker.storage import PhotoStorage
@@ -71,20 +71,15 @@ def create_check(
         "check_created",
         check_id=str(check_id),
         photos=len(photos),
-        contacts=[c.kind for c in check.contacts],
+        contacts=[f"{c.kind}:{c.source}" for c in check.contacts],
     )
     return check_id
 
 
 def _contact_rows(submission: ValidSubmission, pepper: bytes) -> list[CheckContact]:
-    values: list[tuple[ContactKind, str | None]] = [
-        ("phone", submission.phone_e164),
-        ("email", submission.email_normalized),
-    ]
     return [
-        CheckContact(kind=kind, hmac_hash=contact_hash(kind, value, pepper))
-        for kind, value in values
-        if value is not None
+        CheckContact(kind=c.kind, source=c.source, hmac_hash=contact_hash(c.kind, c.value, pepper))
+        for c in submission.contacts
     ]
 
 

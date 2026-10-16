@@ -189,3 +189,30 @@ should fill in "Code locations" once the code exists.
 - Trade-offs: a branch pushed without a PR gets no CI. That's acceptable with the
   one-PR-per-milestone workflow.
 - Code locations: `.github/workflows/ci.yml`
+
+## ED-016: Contacts inside the listing text are extracted, hashed and redacted  (2026-10-16, M2)
+- Problem / decision: M1 stored `listing_text` as submitted, so phone numbers and emails written
+  in the text (common in real listings) were persisted raw, contradicting the privacy rule. Those
+  contacts are also the ones most useful to the contact graph.
+- Alternatives considered: (1) accept it until the M8 retention job deletes old text; (2) redact
+  only; (3) redact and also link the extracted contacts. Humayun chose (3).
+- Chosen: before storing, `extract_contacts()` replaces every email (first) and phone number
+  (libphonenumber's `PhoneNumberMatcher`, default region CA) with `[email]` / `[phone]`, and
+  returns the normalized values. They are HMAC-hashed into `check_contacts` with
+  `source = 'text'`; form-field contacts have `source = 'field'`. Contacts are de-duplicated on
+  (kind, normalized value) before insert, field first, so a number in both the field and the text
+  is one row with source `field`. The DB enforces it with `UNIQUE (check_id, kind, hmac_hash)`,
+  which replaces `UNIQUE (check_id, kind)`. At most 10 distinct values per kind are kept from the
+  text, but every occurrence is redacted. Migration `0003_contact_source` applies the same
+  extraction to rows stored before it.
+- Why: the raw value never exists in the database, logs or job payloads, and the graph gets
+  every contact a scammer reused. Emails go first so `4165550123@gmail.com` is one email, not an
+  email plus a phone. The matcher only accepts valid numbers, so prices, dates, postal codes and
+  unit numbers are left alone (tested).
+- Trade-offs: the text signal (M4) sees placeholders rather than numbers, which loses nothing for
+  its flag set. Deliberately obfuscated numbers ("four one six…", letter O for zero) are not
+  caught. The redaction is irreversible: downgrading 0003 drops the `text` rows for good.
+  The migration needs `CONTACT_HASH_PEPPER` at deploy time.
+- Code locations: `apps/api/rentalscamchecker/contacts.py` (`extract_contacts`),
+  `checks/validation.py` (`_merge_contacts`), `models.py` (`CheckContact.source`),
+  `alembic/versions/0003_contact_source.py`

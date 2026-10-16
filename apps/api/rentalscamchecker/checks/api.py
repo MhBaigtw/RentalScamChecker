@@ -47,8 +47,9 @@ class PhotoOut(BaseModel):
 
 
 class ContactOut(BaseModel):
-    # Only the kind: hashes are internal and raw values are never stored.
+    # Kind and source only: hashes are internal and raw values are never stored.
     kind: str
+    source: str
 
 
 class SignalOut(BaseModel):
@@ -162,7 +163,7 @@ def _to_out(check: Check) -> CheckOut:
             PhotoOut(id=p.id, position=p.position, width=p.width, height=p.height)
             for p in check.photos
         ],
-        contacts=[ContactOut(kind=c.kind) for c in check.contacts],
+        contacts=[ContactOut(kind=c.kind, source=c.source) for c in check.contacts],
         signals=[
             SignalOut(
                 name=s.name,
