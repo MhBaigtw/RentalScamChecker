@@ -6,14 +6,15 @@ from sqlalchemy import create_engine, pool
 
 from alembic import context
 from rentalscamchecker.config import get_settings
+from rentalscamchecker.models import Base
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set to the models' MetaData in M1 to enable autogenerate.
-target_metadata = None
+# The models' metadata, so `alembic revision --autogenerate` can diff it against the database.
+target_metadata = Base.metadata
 
 database_url = get_settings().database_url
 
