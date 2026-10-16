@@ -184,7 +184,7 @@ def build_worker(settings: Settings, session_factory: sessionmaker[Session]) -> 
         backoff_max_seconds=settings.job_backoff_max_seconds,
         job_timeout_seconds=settings.job_timeout_seconds,
     )
-    handlers = build_handlers(session_factory, enabled_signals(settings), settings)
+    handlers = build_handlers(session_factory, enabled_signals(settings, session_factory), settings)
     return Worker(session_factory, handlers, config)
 
 

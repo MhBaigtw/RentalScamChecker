@@ -39,6 +39,22 @@ class Settings(BaseSettings):
     # The aggregator runs when every signal has a result, or after this long, whichever is first.
     check_timeout_seconds: float = 120.0
 
+    # --- price_vs_market (M3) ---
+    # Severity when the rent is at least this many percent below the CMHC reference rent.
+    # Never shown to users (SPEC 10: don't expose rule thresholds).
+    price_medium_below_percent: float = Field(default=30.0, gt=0, lt=100)
+    price_high_below_percent: float = Field(default=50.0, gt=0, lt=100)
+
+    # --- address_sanity / geocoding (M3) ---
+    # Required when address_sanity is enabled: Nominatim's usage policy asks clients to identify
+    # themselves; the address goes in our User-Agent so the operator can reach us. Never hard-coded.
+    nominatim_contact_email: str | None = None
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    # Policy: an absolute maximum of 1 request per second, across all our workers.
+    nominatim_min_interval_seconds: float = Field(default=1.0, ge=1.0)
+    # Per-request network timeout; well below JOB_TIMEOUT_SECONDS.
+    geocoder_timeout_seconds: float = Field(default=10.0, gt=0)
+
     # --- Job queue and worker (M2, ED-002) ---
     job_max_attempts: int = Field(default=5, ge=1)
     # A claimed job is reserved for this long; if the worker hasn't finished by then (crash,
@@ -60,6 +76,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds}) must be > 0 and less than "
                 f"JOB_LEASE_SECONDS ({self.job_lease_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _price_thresholds_ordered(self) -> "Settings":
+        if not self.price_medium_below_percent < self.price_high_below_percent:
+            raise ValueError(
+                "PRICE_MEDIUM_BELOW_PERCENT must be less than PRICE_HIGH_BELOW_PERCENT"
             )
         return self
 

@@ -82,7 +82,7 @@ def build_router(
 ) -> APIRouter:
     router = APIRouter()
     pepper = settings.contact_hash_pepper.get_secret_value().encode()
-    signals = enabled_signals(settings)
+    signals = enabled_signals(settings, session_factory)
 
     def enqueue_jobs(session: Session, check_id: uuid.UUID) -> None:
         enqueue_check_jobs(

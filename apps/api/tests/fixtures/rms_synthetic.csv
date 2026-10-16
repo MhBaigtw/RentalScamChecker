@@ -1,0 +1,13 @@
+geography_type,geography_code,geography_name,cma_name,bedrooms,avg_rent_cents,reliability,survey_year,survey_month,source,source_url
+cma,2270,Toronto,Toronto,0,150000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/cma-toronto
+cma,2270,Toronto,Toronto,1,180000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/cma-toronto
+cma,2270,Toronto,Toronto,2,200000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/cma-toronto
+cma,2270,Toronto,Toronto,3,230000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/cma-toronto
+csd,3524001,Oakville,Toronto,2,240000,b,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville
+csd,3524001,Oakville,Toronto,2,220000,a,2024,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-2024
+csd,3524001,Oakville,Toronto,3,250000,b,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville
+csd,3521005,Mississauga,Toronto,1,170000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/mississauga
+csd,3520005,Toronto,Toronto,1,190000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto
+csd,3521024,Caledon,Toronto,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/caledon
+csd,3524009,Milton,Toronto,2,160000,d,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/milton
+csd,3524002,Burlington,Hamilton,3,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/burlington

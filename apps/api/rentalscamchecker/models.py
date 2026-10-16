@@ -50,6 +50,7 @@ CONTACT_SOURCES = ("field", "text")
 SIGNAL_STATUSES = ("ok", "skipped", "error")
 SEVERITIES = ("none", "low", "medium", "high")
 JOB_STATUSES = ("queued", "running", "done", "failed", "dead")
+GEOGRAPHY_TYPES = ("cma", "csd")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -212,23 +213,69 @@ class Job(Base):
 
 
 class ReferenceRent(Base):
-    """CMHC average rent per census metropolitan area and bedroom count (loaded in M3)."""
+    """CMHC Rental Market Survey average rent for one geography, bedroom type and survey (M3).
+
+    Geographies: a census metropolitan area (`cma`) or a municipality (census subdivision,
+    `csd`). Suppressed values (CMHC "**") are kept with NULL rent and reliability: the row still
+    says which CMA the municipality belongs to, which the CMA fallback needs (ED-021).
+    """
 
     __tablename__ = "reference_rents"
     __table_args__ = (
+        CheckConstraint(_in("geography_type", GEOGRAPHY_TYPES), name="geography_type"),
         CheckConstraint("bedrooms BETWEEN 0 AND 3", name="bedrooms_range"),
+        CheckConstraint("survey_month BETWEEN 1 AND 12", name="survey_month_range"),
+        CheckConstraint("reliability IN ('a', 'b', 'c', 'd')", name="reliability"),
+        CheckConstraint(
+            "(avg_rent_cents IS NULL) = (reliability IS NULL)", name="suppressed_consistently"
+        ),
         UniqueConstraint(
-            "cma", "bedrooms", "survey_year", name="uq_reference_rents_cma_bedrooms_survey_year"
+            "geography_type",
+            "geography_code",
+            "bedrooms",
+            "survey_year",
+            "survey_month",
+            name="uq_reference_rents_geography_bedrooms_survey",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
-    cma: Mapped[str] = mapped_column(Text)
-    # CMHC buckets: 0 = bachelor, 1, 2, 3 = "3 bedroom +".
+    geography_type: Mapped[str] = mapped_column(Text)
+    # StatCan CSD code for municipalities; HMIP's own id for CMAs.
+    geography_code: Mapped[str] = mapped_column(Text)
+    geography_name: Mapped[str] = mapped_column(Text)
+    cma_name: Mapped[str] = mapped_column(Text)
+    # CMHC buckets: 0 = studio/bachelor, 1, 2, 3 = "3 bedroom +".
     bedrooms: Mapped[int] = mapped_column(SmallInteger)
-    avg_rent_cents: Mapped[int] = mapped_column(Integer)
+    avg_rent_cents: Mapped[int | None] = mapped_column(Integer)
+    # CMHC letter code: a excellent, b very good, c good, d poor (use with caution).
+    reliability: Mapped[str | None] = mapped_column(Text)
     survey_year: Mapped[int] = mapped_column(SmallInteger)
+    survey_month: Mapped[int] = mapped_column(SmallInteger)
     source: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text)
+
+
+class GeocodeCache(Base):
+    """Raw geocoder responses by normalized query, including empty ones (M3). Nominatim's usage
+    policy requires caching and forbids repeating the same query. Data: OpenStreetMap, ODbL."""
+
+    __tablename__ = "geocode_cache"
+
+    query_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    response: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RateLimit(Base):
+    """Last request time per external service, shared by every worker process (M3). Callers lock
+    the row, wait until the minimum interval has passed, call the service, then update it."""
+
+    __tablename__ = "rate_limits"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_request_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class LlmCache(Base):

@@ -1,10 +1,14 @@
 import pytest
+from sqlalchemy.orm import Session, sessionmaker
 
 from rentalscamchecker.jobs.queue import backoff_seconds
 from rentalscamchecker.signals.base import CheckInput, SignalContext
 from rentalscamchecker.signals.registry import enabled_signals
 from rentalscamchecker.signals.stub import StubSignal
 from tests.helpers import UNREACHABLE_DB_URL, make_settings
+
+# Signals are only constructed here, never run, so they get an unbound session factory.
+NO_DB: sessionmaker[Session] = sessionmaker()
 
 
 @pytest.mark.parametrize(
@@ -17,16 +21,16 @@ def test_backoff_doubles_per_attempt_up_to_the_cap(attempt: int, expected: float
 def test_enabled_signals_follow_settings() -> None:
     settings = make_settings(UNREACHABLE_DB_URL, enabled_signals=" stub , ")
 
-    assert [s.name for s in enabled_signals(settings)] == ["stub"]
+    assert [s.name for s in enabled_signals(settings, NO_DB)] == ["stub"]
 
 
 def test_no_enabled_signals_is_allowed() -> None:
-    assert enabled_signals(make_settings(UNREACHABLE_DB_URL, enabled_signals="")) == []
+    assert enabled_signals(make_settings(UNREACHABLE_DB_URL, enabled_signals=""), NO_DB) == []
 
 
 def test_unknown_signal_name_fails_at_startup() -> None:
     with pytest.raises(ValueError, match="unknown signal"):
-        enabled_signals(make_settings(UNREACHABLE_DB_URL, enabled_signals="stub,tineye"))
+        enabled_signals(make_settings(UNREACHABLE_DB_URL, enabled_signals="stub,tineye"), NO_DB)
 
 
 def test_stub_signal_returns_its_fixed_result() -> None:
