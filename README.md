@@ -27,6 +27,9 @@ macOS/Linux use `python3.12` and `.venv/bin/` instead of `py -3.12` and `.venv\S
 
 Local ports: Postgres **5434**, API **8100**, web **3100**.
 
+Windows: clone to a short path (e.g. `C:\Users\<you>\dev\`). If Windows long-path support is
+off, `pip install` fails inside deeply nested folders (see docs/problems-and-solutions.md, P-004).
+
 ```powershell
 git clone https://github.com/MhBaigtw/RentalScamChecker.git
 cd RentalScamChecker

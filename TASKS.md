@@ -9,16 +9,16 @@ Target pace: about 20 hours/week, 10 weeks. Weeks are a guide, not a contract.
 
 ## M0 — Foundation (week 1)
 
-- [ ] Verify environment: Python 3.12 via `py`, Node 20+, Git, free disk space; Docker works?
+- [x] Verify environment: Python 3.12 via `py`, Node 20+ (now 24+, ED-010), Git, free disk space; Docker works?
       If not, set up the fallback in CLAUDE.md and document it in docs/deployment.md.
-- [ ] Monorepo layout per CLAUDE.md; root README; `.gitignore` (incl. `eval/private/`, `.env`).
-- [ ] Postgres 16 + pgvector available locally (docker compose or fallback).
-- [ ] `apps/api`: FastAPI skeleton, settings via env, structlog JSON logging, `GET /health`
+- [x] Monorepo layout per CLAUDE.md; root README; `.gitignore` (incl. `eval/private/`, `.env`).
+- [x] Postgres 16 + pgvector available locally (docker compose or fallback).
+- [x] `apps/api`: FastAPI skeleton, settings via env, structlog JSON logging, `GET /health`
       that checks the DB connection; Alembic initialized with an empty baseline migration.
-- [ ] `apps/web`: Next.js + TypeScript strict + Tailwind; home page calls `/health`.
-- [ ] Tooling: ruff, mypy, pytest (api); eslint, tsc, vitest (web); pre-commit hooks.
-- [ ] GitHub Actions CI: lint + type check + tests for both apps, Postgres service container.
-- [ ] docs/ seeded per docs/README.md.
+- [x] `apps/web`: Next.js + TypeScript strict + Tailwind; home page calls `/health`.
+- [x] Tooling: ruff, mypy, pytest (api); eslint, tsc, vitest (web); pre-commit hooks.
+- [x] GitHub Actions CI: lint + type check + tests for both apps, Postgres service container.
+- [x] docs/ seeded per docs/README.md.
 
 Done when: `GET /health` returns ok with DB up and fails cleanly with DB down; CI is green on a
 pushed branch; a fresh clone can be set up by following the README.
@@ -140,3 +140,11 @@ outside Claude Code.
 ## Log
 
 (Claude Code: append one line per milestone: date, milestone, what was verified, commit.)
+- 2026-10-16, M0: env checked (py -3.12 → 3.12.6, Node 24.14.1, Git 2.55.0, 25.9 GB free, Docker 29.2.1 OK);
+  `docker compose up --wait` → Postgres 16.15 + pgvector 0.8.7 (CREATE EXTENSION ok); live API on :8100:
+  `/health` 200 `{"status":"ok","database":"ok"}` with DB up, 503 `database_unavailable` error shape
+  with DB stopped (2.0 s, bounded by connect timeout), 200 again after restart without restarting the API;
+  web on :3100 shows ok / degraded / unreachable for DB up / DB down / API down; api: ruff ok, mypy strict ok,
+  pytest 4/4; web: eslint ok, tsc ok, vitest 4/4, build ok (/ is partial prerender); CI run 38851272104
+  green (both jobs) on branch m0-foundation; fresh clone of m0-foundation set up per README (short path,
+  see P-004): pytest 4/4, npm ci, lint, typecheck, vitest 4/4. Commits 10d9fc6 (main), e582964 + follow-up (m0-foundation).
