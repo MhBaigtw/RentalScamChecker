@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # apps/api/rentalscamchecker/config.py -> repo root is three levels above this package.
@@ -39,17 +39,83 @@ class Settings(BaseSettings):
     # The aggregator runs when every signal has a result, or after this long, whichever is first.
     check_timeout_seconds: float = 120.0
 
+    # --- price_vs_market (M3) ---
+    # Severity when the rent is at least this many percent below the CMHC reference rent.
+    # Never shown to users (SPEC 10: don't expose rule thresholds).
+    price_medium_below_percent: float = Field(default=30.0, gt=0, lt=100)
+    price_high_below_percent: float = Field(default=50.0, gt=0, lt=100)
+
+    # --- address_sanity / geocoding (M3) ---
+    # Required when address_sanity is enabled: Nominatim's usage policy asks clients to identify
+    # themselves; the address goes in our User-Agent so the operator can reach us. Never hard-coded.
+    nominatim_contact_email: str | None = None
+    nominatim_base_url: str = "https://nominatim.openstreetmap.org"
+    # Policy: an absolute maximum of 1 request per second, across all our workers.
+    nominatim_min_interval_seconds: float = Field(default=1.0, ge=1.0)
+    # HTTP timeouts for Nominatim. httpx applies each per phase (connect; each read), not as a
+    # total, so the worst case is the sum; see _external_calls_fit_in_job_timeout.
+    geocoder_connect_timeout_seconds: float = Field(default=5.0, gt=0)
+    geocoder_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Longest wait for our turn at the Nominatim rate limit (a Postgres lock_timeout).
+    geocoder_lock_wait_seconds: float = Field(default=15.0, gt=0)
+
+    # --- Internal endpoints ---
+    # Bearer token for GET /internal/metrics. If unset, the endpoint is open in development/test
+    # and disabled in production.
+    internal_metrics_token: SecretStr | None = None
+
     # --- Job queue and worker (M2, ED-002) ---
     job_max_attempts: int = Field(default=5, ge=1)
     # A claimed job is reserved for this long; if the worker hasn't finished by then (crash,
     # hang), the job is handed out again. Must be longer than any single signal can take.
     job_lease_seconds: float = 60.0
+    # Hard limit for one attempt of one job, always below the lease (checked at startup): an
+    # attempt that overruns is failed as retryable before its lease can expire (ED-017).
+    job_timeout_seconds: float = 45.0
     # Retry n waits min(max, base * 2^(n-1)) seconds.
     job_backoff_base_seconds: float = 2.0
     job_backoff_max_seconds: float = 300.0
     worker_concurrency: int = Field(default=2, ge=1)
     # How long an idle worker thread waits before polling the queue again.
     worker_poll_interval_seconds: float = 1.0
+    # How often each worker process writes its counters for /internal/metrics.
+    worker_heartbeat_interval_seconds: float = Field(default=5.0, gt=0)
+
+    @model_validator(mode="after")
+    def _timeout_below_lease(self) -> "Settings":
+        if not 0 < self.job_timeout_seconds < self.job_lease_seconds:
+            raise ValueError(
+                f"JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds}) must be > 0 and less than "
+                f"JOB_LEASE_SECONDS ({self.job_lease_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _external_calls_fit_in_job_timeout(self) -> "Settings":
+        """Every external call must give up on its own before the job timeout (ED-017), so a
+        slow service fails the attempt cleanly instead of leaving an abandoned thread behind.
+        Add each new client's worst case here (M4: the Anthropic API)."""
+        geocoder_worst_case = (
+            self.geocoder_lock_wait_seconds
+            + self.nominatim_min_interval_seconds
+            + self.geocoder_connect_timeout_seconds
+            + self.geocoder_timeout_seconds
+        )
+        if geocoder_worst_case >= self.job_timeout_seconds:
+            raise ValueError(
+                f"geocoder worst case ({geocoder_worst_case:g} s = lock wait + rate-limit interval "
+                f"+ connect + read timeouts) must be below JOB_TIMEOUT_SECONDS "
+                f"({self.job_timeout_seconds:g} s)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _price_thresholds_ordered(self) -> "Settings":
+        if not self.price_medium_below_percent < self.price_high_below_percent:
+            raise ValueError(
+                "PRICE_MEDIUM_BELOW_PERCENT must be less than PRICE_HIGH_BELOW_PERCENT"
+            )
+        return self
 
     @property
     def enabled_signal_names(self) -> list[str]:

@@ -37,6 +37,7 @@ class ListingOut(BaseModel):
     listing_text: str
     rent_cents: int
     bedrooms: int
+    unit_type: str
     address_text: str
     city: str
 
@@ -82,7 +83,7 @@ def build_router(
 ) -> APIRouter:
     router = APIRouter()
     pepper = settings.contact_hash_pepper.get_secret_value().encode()
-    signals = enabled_signals(settings)
+    signals = enabled_signals(settings, session_factory)
 
     def enqueue_jobs(session: Session, check_id: uuid.UUID) -> None:
         enqueue_check_jobs(
@@ -105,6 +106,7 @@ def build_router(
         submitted_url: OptionalForm = None,
         contact_phone: OptionalForm = None,
         contact_email: OptionalForm = None,
+        unit_type: OptionalForm = None,
         photos: Annotated[list[UploadFile] | None, File()] = None,
     ) -> CheckCreated:
         raw = RawSubmission(
@@ -116,6 +118,7 @@ def build_router(
             submitted_url=submitted_url,
             contact_phone=contact_phone,
             contact_email=contact_email,
+            unit_type=unit_type,
         )
         errors: list[FieldError] = []
         try:
@@ -168,6 +171,7 @@ def _to_out(check: Check) -> CheckOut:
             listing_text=check.listing_text,
             rent_cents=check.rent_cents,
             bedrooms=check.bedrooms,
+            unit_type=check.unit_type,
             address_text=check.address_text,
             city=check.city,
         ),

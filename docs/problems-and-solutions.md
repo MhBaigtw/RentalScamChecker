@@ -48,14 +48,18 @@ Format: symptom, root cause, fix, lesson.
 ## P-006: Status polling looked ~2 s per request slower than the API logs said  (2026-10-16, M2)
 - Symptom: a Python script polling `http://localhost:8100` saw its first response after 4.4 s,
   while the API's own logs showed requests taking milliseconds.
-- Root cause (likely, not proven): on Windows, `localhost` resolves to `::1` first; uvicorn listens
-  on `127.0.0.1` only, so each new connection waits for the IPv6 attempt to fail before falling
-  back to IPv4.
+- Root cause (verified pre-M3): on Windows, `localhost` resolves to `['::1', '127.0.0.1']`;
+  uvicorn listens on `127.0.0.1` only, so the client first tries `::1`, and Windows reports the
+  refused connection only after about 2 s (it retries refused connects), then falls back to IPv4.
+  Measured with urllib against `/health`: `localhost` 2,075 ms and 2,061 ms, `127.0.0.1` 21 ms
+  and 12 ms; a raw `::1` connect was refused after 2,006 ms.
 - Fix: use `http://127.0.0.1:8100` in scripts. Then: POST 0.12 s, pending -> running -> complete
   visible at 0.16 s / 0.66 s / 1.72 s.
 - Lesson: when a client-side timing disagrees with server logs, suspect the connection
-  (DNS/IPv6) before the server. Relevant for the web app's `API_URL` too (it uses `localhost`;
-  revisit if server-side fetches look slow).
+  (DNS/IPv6) before the server.
+- Follow-up (pre-M3): `API_URL` in `.env.example` and the web app's `DEFAULT_API_URL` now use
+  `http://127.0.0.1:8100` for the same reason. Postgres URLs keep `localhost`: Docker publishes
+  port 5434 on IPv6 too (`[::]:5434`), so there is no fallback delay there.
 
 ## P-007: mypy passed on Windows, failed in CI on Linux  (2026-10-16, M2)
 - Symptom: CI's `mypy tests alembic` reported `Module has no attribute "CREATE_NEW_PROCESS_GROUP"`
@@ -66,3 +70,17 @@ Format: symptom, root cause, fix, lesson.
   statically. Verified locally with `mypy --platform linux` as well as the default.
 - Lesson: platform-specific code needs a type check per platform; `mypy --platform linux` catches
   this before CI does.
+
+## P-008: "Caledon" and "Milton" had no reference rent: the province-suffix regex ate the name  (2026-10-16, M3)
+- Symptom: the CMA-fallback tests for Caledon and Milton failed with `None`, although the
+  municipal and CMA rows were in the database, and each half of the lookup worked when called
+  separately.
+- Root cause: `normalize_city` stripped a trailing province with `r",?\s*(on|ont|ontario)\.?$"`.
+  The comma and the space were both optional, so it also removed the final "on" of Caledon,
+  Milton, Burlington and Kingston ("caled", "milt"...). Two tests (Burlington, Kingston expected
+  `None`) passed by accident.
+- Fix: the suffix must follow a comma or whitespace: `r"(,\s*|\s+)(on|ont|ontario)\.?$"`.
+  Regression cases for those four names added. The same function is used by address_sanity's
+  city comparison, which had the same bug.
+- Lesson: a test whose expected value is "nothing found" can pass for the wrong reason; check
+  that a "None" result is None for the reason you think.

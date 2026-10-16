@@ -51,12 +51,12 @@ reaches "complete" through the worker with the stub signal.
 
 ## M3 — price_vs_market (week 3)
 
-- [ ] Download CMHC average rent table (record source URL, survey year, licence in docs);
+- [x] Download CMHC average rent table (record source URL, survey year, licence in docs);
       loader into `reference_rents`; investigate zone boundaries (answer SPEC open question).
-- [ ] Geocoding client (Nominatim) with caching table, rate limiting (max 1 req/s), proper
+- [x] Geocoding client (Nominatim) with caching table, rate limiting (max 1 req/s), proper
       User-Agent; `address_sanity` signal.
-- [ ] `price_vs_market` signal with configurable threshold; clear explanation text.
-- [ ] Unit tests with fixtures; no live network in tests (record/replay or fakes).
+- [x] `price_vs_market` signal with configurable threshold; clear explanation text.
+- [x] Unit tests with fixtures; no live network in tests (record/replay or fakes).
 
 Done when: both signals run in the pipeline for a real Oakville/Mississauga address and the
 report shows evidence (reference rent, year, CMA, percentage below).
@@ -170,3 +170,18 @@ outside Claude Code.
   worker on :8100: POST 202 → pending 0.16 s → running 0.66 s → complete 1.72 s with the stub result; aggregate
   job pulled forward from 120 s to 1.78 s. EXPLAIN (202k jobs): claim 0.45 ms via ix_jobs_claimable vs 77 ms
   seq scan.
+- 2026-10-16, M3 (branch m3-price-and-address). Pre-M3: deleted the 13 pre-M2 pending dev checks (+31 photo,
+  23 contact rows, 2 photo folders); per-job timeout 45 s < 60 s lease (ED-017) and result upsert rule (ED-020);
+  API_URL → 127.0.0.1 (P-006 measured: localhost 2,061-2,075 ms vs 12-21 ms). M3: CMHC dataset (licence approved)
+  from the official Toronto/Hamilton RMS workbooks, tables 3.1.9 vacant / 3.1.2 all units, Oct 2025, 120 rows;
+  2-bed vacant vs all: Oakville 2,621 (b) vs 2,309 (b), Mississauga 2,473 (a) vs 2,001 (a), Brampton 2,331 (a)
+  vs 2,025 (a), Toronto CMA 2,530 (a) vs 2,045 (a). SPEC zone question: municipality level suffices (ED-021).
+  Migrations 0005-0007 round-trip, `alembic check` clean; ruff, mypy strict (+ --platform linux) clean;
+  pytest 226/226 locally (76 integration, no live network). Live API + worker (ENABLED_SIGNALS=price_vs_market,
+  address_sanity, real Nominatim, real CMHC data): A 1430 Trafalgar Rd, Oakville, 2-bed $1,500 → complete in
+  1.4 s; price medium, 42.8% below vacant 2-bed $2,621 (Oct 2025, CMA Toronto, Zone 23 - Oakville, b); address
+  medium: Sheridan College Trafalgar Campus, amenity:college (non-residential). B 3880 Duke of York Blvd,
+  Mississauga, 1-bed $1,950 → price none, 4.1% below $2,033 (a); address none (residential, Mississauga).
+  C same address, room $750 → price skipped (whole units only); address served from cache. Nominatim: 2 requests,
+  1 cache hit; contact email not in logs. /internal/metrics: 1 worker alive, 0 timeouts, 0 abandoned threads,
+  jobs_done_total 9 after the next heartbeat.

@@ -239,15 +239,26 @@ should fill in "Code locations" once the code exists.
     the worker claimed>`. A worker whose lease expired and whose job was re-claimed gets "not
     owned" back and changes nothing.
   - **At-least-once delivery**: a job can run twice (crash after the work but before `complete`;
-    a lease expiring mid-run), so handlers must be idempotent. Ours insert results with
-    `ON CONFLICT DO NOTHING` on `(check_id, name, version)`.
+    a timed-out attempt still running), so handlers must be idempotent. Results are upserted on
+    `(check_id, name, version)` with an explicit rule (ED-020).
+  - **Per-job timeout** (added before M3): each attempt runs in a helper thread; after
+    `JOB_TIMEOUT_SECONDS` (default 45 s) the worker fails it as a retryable `JobTimeout` and
+    moves on. The timeout must be below `JOB_LEASE_SECONDS` (default 60 s), checked at startup by
+    both `Settings` and `WorkerConfig`, so an overrunning job is always resolved by its own
+    worker (failed, retried with backoff) before the lease expires and the reaper hands it out.
 - Why: short transactions (claims don't hold connections or locks during slow network calls);
   each failure mode has one explicit, tested rule. Jitter only matters when many clients retry
   against one service at the same moment, which isn't the case here.
-- Trade-offs: no heartbeat, so `JOB_LEASE_SECONDS` (60 s) must exceed the slowest signal; a
-  signal that hangs past it runs twice. Python can't kill a hung thread, so signals must use their
-  own network timeouts (M3/M4). The reaper runs on every poll of every thread, which is cheap
-  thanks to its partial index but redundant; fine at this scale.
+- Trade-offs: no heartbeat, so no job may legitimately need more than `JOB_TIMEOUT_SECONDS`.
+  The timeout is hard for the **job**, not for the **code**: Python can't kill a thread, so a
+  timed-out handler keeps running in an abandoned daemon thread until it returns. It no longer
+  owns the job (fencing), its result write is idempotent (ED-020), and the count of
+  still-running abandoned threads is logged (`job_timed_out`). But it still uses a thread and a
+  DB connection, and a signal that truly hangs forever leaks one thread per attempt. So signals
+  must still set their own network timeouts (M3: the geocoder uses 10 s). A real kill would need
+  one process per job (multiprocessing), which is much heavier, especially on Windows; revisit if
+  abandoned threads show up in practice. The reaper runs on every poll of every thread, which is
+  cheap thanks to its partial index but redundant; fine at this scale.
 - Code locations: `apps/api/rentalscamchecker/jobs/queue.py`, `jobs/worker.py`
 
 ## ED-018: Aggregator enqueued at the check timeout, started early when every signal is done  (2026-10-16, M2)
@@ -293,3 +304,171 @@ should fill in "Code locations" once the code exists.
   On Windows, SIGTERM can't be delivered to another process (it becomes TerminateProcess), so the
   graceful path is tested there with CTRL_BREAK; production (Linux) uses SIGTERM, also tested in CI.
 - Code locations: `apps/api/rentalscamchecker/worker.py`, `jobs/worker.py`
+
+## ED-020: Signal results: upsert with "a result beats an error, the final report is frozen"  (2026-10-16, pre-M3)
+- Problem / decision: with at-least-once delivery and the per-job timeout (ED-017), the same
+  signal can write its result more than once, sometimes concurrently and sometimes after the
+  check is final. Which write wins?
+- Context: `UNIQUE (check_id, name, version)` has existed since M1 (`uq_signal_results_check_id_name_version`),
+  and M2 inserted with `ON CONFLICT DO NOTHING` (first write wins), so duplicates were already
+  impossible. What was missing was a deliberate rule for *which* write wins.
+- Alternatives considered: first write wins (M2); last write wins (plain upsert), which could
+  change a report the user has already seen, e.g. a late success overwriting the aggregator's
+  "did not finish" error after the check was marked complete.
+- Chosen: `_record_result` locks the check row, then:
+  - check `complete` (or deleted): write nothing; the report is final.
+  - no row: insert.
+  - existing row is `error` and the new result is not: replace it
+    (`ON CONFLICT ... DO UPDATE ... WHERE signal_results.status = 'error' AND excluded.status <> 'error'`).
+  - otherwise keep the existing row: the first real result wins, and an error never replaces a result.
+- Why: a successful retry or a late success is better information than "could not be
+  completed"; once the aggregator has finalized the check, nothing may change underneath it.
+  One row per key is guaranteed by the constraint either way.
+- Trade-offs: two different successful results for the same key (non-deterministic signal run
+  twice) keep the first, not the latest. Taking the check row lock on every result write
+  serializes writes per check; checks have few signals.
+- Code locations: `apps/api/rentalscamchecker/pipeline.py` (`_record_result`)
+
+## ED-021: price_vs_market baseline: CMHC vacant-unit rent first, by municipality, with fallbacks  (2026-10-16, M3)
+- Problem / decision: which CMHC figure a listing's rent is compared with, and how the data gets
+  into the database. Answers SPEC open question "Can CMHC zone boundaries be obtained?".
+- Findings:
+  - CMHC publishes Rental Market Survey (RMS) averages by bedroom type (studio, 1, 2, 3+) per CMA,
+    per survey zone, and per municipality, each with a reliability letter (a-d) or suppressed (`**`).
+    The survey covers the purpose-built rental market (row and apartment units), not condos,
+    basements or rooms. Latest: October 2025.
+  - **The overall average understates what a new tenant pays.** It is dominated by long-tenure
+    sitting tenants. Humayun raised this before the dataset was committed. CMHC's old "Average
+    Apartment Rents (Vacant & Occupied Units)" product stopped at the 2020 edition, but the current
+    RMS data-table workbooks still publish the split: table 3.1.9 "Average Rents ($) of Vacant and
+    Occupied Units by Zone and Bedroom Type" (row and apartment). Its rows include whole
+    municipalities (e.g. "Mississauga City (Zones 18-20)", "Zone 23 - Oakville") and the CMA. Every
+    row we use carries CMHC's "Y" flag: vacant rents are statistically higher than occupied rents
+    (95% confidence).
+  - October 2025, 2-bedroom, row and apartment (vacant units from table 3.1.9; all units from
+    table 3.1.2, identical to the HMIP portal figures):
+
+    | | vacant units | all units | vacant vs all |
+    |---|---|---|---|
+    | Oakville | $2,621 (b) | $2,309 (b) | +13.5% |
+    | Mississauga | $2,473 (a) | $2,001 (a) | +23.6% |
+    | Brampton | $2,331 (a) | $2,025 (a) | +15.1% |
+    | Toronto CMA | $2,530 (a) | $2,045 (a) | +23.7% |
+
+    For comparison, the RMS report's Toronto 2-bedroom "turnover rent" (rent on a new lease; Rental
+    Market Report Fall 2025, p. 87) was
+    $2,547 in 2025, close to the vacant figure. Against the all-units baseline, a listing 30%
+    below would be 38-43% below the vacant baseline in these cities, so the old baseline would miss
+    exactly the listings this signal exists for.
+  - Coverage: vacant values are suppressed more often (32 of 120 values suppressed overall), but
+    every municipality in our list still gets a vacant baseline for every bedroom bucket, its own or
+    its CMA's (table in the M3 log). The vacant data is therefore usable, not too suppressed.
+- Alternatives considered: overall (all-units) average only, as first implemented; turnover rent
+  (published only per CMA and mostly for 2-bedroom in the report text, not as a per-municipality
+  table); zone level with boundary files (Mississauga and Brampton have 2-3 sub-zones; would need
+  point-in-polygon on a geocode, making the signal depend on the geocoder).
+- Chosen:
+  - Baseline order (Humayun's spec), first value with reliability a, b or c wins:
+    1. municipality, vacant units; 2. CMA, vacant units; 3. municipality, all units;
+    4. CMA, all units. Otherwise `skipped`. Reliability `d` is never used.
+  - Municipality level matched by the city the user typed (normalized: `City of Oakville, ON` →
+    `oakville`, Toronto districts → `toronto`), with no network, so the signal is independent of
+    the geocoder. address_sanity separately checks that the typed city matches the geocoded one.
+  - `unit_type` on the submission (`whole_unit` default, `room`, `basement`). Rooms are `skipped`
+    ("CMHC's rent data covers whole units only"); basements are compared, with a caveat in the
+    explanation that basements aren't in the survey and often rent for less.
+  - Severity: `medium` from 30% below the baseline, `high` from 50% below (`PRICE_*_BELOW_PERCENT`);
+    never flagged when above.
+  - Evidence: listing and reference rent, percent below, `rent_basis` (`vacant_units`/`all_units`),
+    a plain-language `baseline` ("average asking rent for vacant 2-bedroom units in Oakville"),
+    level, the CMHC row used (`cmhc_geography`), CMA, survey, reliability, source URL and CMHC's
+    required "Adapted from ..." attribution. Thresholds are deliberately left out (SPEC 10).
+  - Data: `data/reference/cmhc/fetch_rms.py` reads CMHC's official workbooks (Toronto and Hamilton
+    CMAs) and writes the CSV with provenance on every row (licence approved by Humayun; see
+    `data/reference/cmhc/README.md`). The loader `python -m rentalscamchecker.reference_rents <csv>`
+    upserts it. The loader lives in the app package so it is type-checked and tested.
+- Why: the vacant-unit average is CMHC's published figure closest to the price a new tenant is
+  asked, which is what a listing shows; municipality figures match how users describe a listing.
+  Answer to the SPEC question: zone boundaries aren't needed for v1.
+- Trade-offs and open issue:
+  - **Fallback order can overstate the baseline for small municipalities.** Where a municipality's
+    vacant value is suppressed, step 2 (CMA vacant) wins over step 3 (its own all-units value), even
+    when the CMA is much pricier. Milton/Halton Hills 2-bedroom: CMA vacant $2,530 vs the zone's own
+    all-units $1,667. A typical $1,700 Milton listing would be 33% below the baseline and flagged
+    `medium`. Markham and Caledon 2-bedroom are in the same situation. Raised with Humayun at the
+    end of M3; not changed without his decision.
+  - Purpose-built rentals only: basements and condos can legitimately differ (caveat in the text;
+    to be measured in the evaluation). A misspelled or unlisted city means no comparison. The
+    dataset must be refreshed yearly.
+- Code locations: `apps/api/rentalscamchecker/reference_rents.py`, `signals/price_vs_market.py`,
+  `checks/validation.py` (`unit_type`), `data/reference/cmhc/fetch_rms.py`, migrations
+  `0005_reference_rents_geocoding` and `0006_check_unit_type`
+
+## ED-022: Nominatim client: identified, cached, globally rate-limited through Postgres  (2026-10-16, M3)
+- Problem / decision: how address_sanity geocodes while following the Nominatim usage policy
+  (max 1 request/s in total, identifying User-Agent, results cached, no repeated queries,
+  attribution, ODbL data).
+- Alternatives considered: a per-process `time.sleep` limiter (doesn't hold across several worker
+  processes); Redis (new infrastructure); a paid geocoder (cost; SPEC says later if needed).
+- Chosen:
+  - User-Agent `RentalScamChecker/0.1 (+<repo URL>; <NOMINATIM_CONTACT_EMAIL>)`. The email comes
+    only from the environment; the API and the worker refuse to start if `address_sanity` is
+    enabled without a valid one.
+  - Cache table `geocode_cache` keyed by the normalized query; "not found" is cached too.
+  - Rate limit: a `rate_limits` row per service. A caller locks it (`SELECT ... FOR UPDATE`, with a
+    `GEOCODER_LOCK_WAIT_SECONDS` (15 s) `lock_timeout`), sleeps until `NOMINATIM_MIN_INTERVAL_SECONDS` (≥ 1, validated) has
+    passed since the last request, makes the HTTP call **while holding the lock**, then records the
+    time. All our requests are serialized across every thread and process.
+  - Query: `"<address>, <city>, Canada"`, `countrycodes=ca`, `format=jsonv2`, `addressdetails=1`,
+    `limit=1`; HTTP timeouts 5 s connect and 10 s per read. HTTP errors and network errors raise `GeocodingUnavailable`, and
+    the job is retried with backoff. Errors are not cached.
+  - Attribution "© OpenStreetMap contributors (data under the ODbL)" is in every address_sanity
+    result's evidence for the UI to show.
+- Rules (address_sanity): not found → `low`; found in a different place than the typed city →
+  `medium` (the typed city may match any locality field: city, town, suburb, neighbourhood..., so
+  "Streetsville" matches a Mississauga address); OSM class/type is non-residential (amenity, shop,
+  office, commercial or school building, ...) → `medium`; both → `high`.
+- Why: Postgres is already there and already coordinates the workers (ED-002); the limiter is
+  correct across processes and is tested with three geocoders racing.
+- Trade-offs: holding the row lock during the HTTP call means queued geocodes wait in line, so
+  each costs about 1 s plus latency; fine at our volume. Many concurrent checks would back up
+  (after the 15 s lock wait the job fails and retries). The geocoded point isn't yet written to the
+  `checks.geocoded_*` columns; it's in the result evidence, and the M6 graph will decide where it
+  lives. OSM's coverage of house numbers in new subdivisions is incomplete, which is why not-found
+  is only `low`.
+- Code locations: `apps/api/rentalscamchecker/geocoding.py`, `signals/address_sanity.py`,
+  `signals/registry.py`, migration `0005_reference_rents_geocoding`
+
+## ED-023: Abandoned threads: the slot is freed, each external call has its own timeout budget, and workers report counters  (2026-10-16, M3)
+- Problem / decision: after a per-job timeout (ED-017), what still holds resources, how to stop
+  external calls from outliving the job, and how operators can see it.
+- Findings (tested): a timed-out attempt does **not** keep its worker slot. The worker thread stops
+  waiting at the timeout, records a retryable failure and claims the next job. With one slot and a
+  job that overruns for 3 s, the next job finished within 2.5 s while the first one's helper thread
+  was still running (`test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running`).
+  What stays busy is the **helper thread**, plus any DB connection it holds, until its code returns.
+- Chosen:
+  - **Timeout budget per external call**, validated at startup in `Settings`: every client's worst
+    case must be below `JOB_TIMEOUT_SECONDS`, so a slow service fails the attempt by itself instead
+    of leaving an abandoned thread. Nominatim: lock wait 15 + rate-limit interval 1 + connect 5 +
+    read 10 = 31 s < 45 s. The Anthropic client in M4 must be added to the same validator.
+    Caveat: httpx timeouts apply per phase (connect, and each read or write), not to the whole
+    request, so a server trickling bytes could in theory exceed the sum; the job timeout remains
+    the backstop.
+  - **Counters**: each worker counts jobs done, failed and timed out, and abandoned helper threads
+    still alive. `job_timed_out` log lines carry `abandoned_threads_alive` and
+    `jobs_timed_out_total`. Every `WORKER_HEARTBEAT_INTERVAL_SECONDS` (5 s) each worker process
+    upserts its row in `worker_heartbeats`, and marks `stopped_at` on a clean exit.
+  - **`GET /internal/metrics`** (API) returns jobs by status, workers alive (heartbeat < 30 s old
+    and not stopped), total abandoned threads alive, timeouts, and per-worker rows. Access: with
+    `INTERNAL_METRICS_TOKEN` set, a matching `Authorization: Bearer` header is required (constant
+    time compare); without it, the endpoint is open in development/test and returns 404 in
+    production.
+- Alternatives considered: a separate metrics HTTP server inside each worker (a second port per
+  process, and the API couldn't aggregate); Prometheus format (no consumer yet; JSON is enough
+  until M9 picks a host and its monitoring).
+- Trade-offs: counters are per process lifetime and reset on restart; old heartbeat rows stay
+  (stopped workers are reported with `stopped_at`), and pruning them is left for M9. The metrics
+  query is three small queries; it isn't cached.
+- Code locations: `apps/api/rentalscamchecker/jobs/worker.py` (`WorkerStats`, `write_heartbeat`),
+  `metrics.py`, `config.py` (`_external_calls_fit_in_job_timeout`), migration `0007_worker_heartbeats`

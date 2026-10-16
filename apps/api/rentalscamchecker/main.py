@@ -10,6 +10,7 @@ from rentalscamchecker.config import Settings, get_settings
 from rentalscamchecker.db import database_is_up, make_engine
 from rentalscamchecker.errors import error_body, install_error_handlers
 from rentalscamchecker.log_config import configure_logging, request_id_middleware
+from rentalscamchecker.metrics import build_router as build_metrics_router
 from rentalscamchecker.storage import LocalDiskStorage
 
 __all__ = ["create_app", "error_body"]
@@ -27,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.middleware("http")(request_id_middleware)
     install_error_handlers(app)
     app.include_router(build_checks_router(session_factory, storage, settings))
+    app.include_router(build_metrics_router(session_factory, settings))
 
     @app.get("/health")
     def health() -> JSONResponse:

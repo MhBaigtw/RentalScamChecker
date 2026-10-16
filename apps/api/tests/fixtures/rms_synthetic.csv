@@ -1,0 +1,32 @@
+geography_type,geography_code,geography_name,cma_name,source_geography,rent_basis,bedrooms,avg_rent_cents,reliability,survey_year,survey_month,source,source_url
+cma,535,Toronto,Toronto,Toronto CMA,vacant_units,0,170000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-vacant_units
+cma,535,Toronto,Toronto,Toronto CMA,all_units,0,150000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-all_units
+cma,535,Toronto,Toronto,Toronto CMA,vacant_units,1,195000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-vacant_units
+cma,535,Toronto,Toronto,Toronto CMA,all_units,1,180000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-all_units
+cma,535,Toronto,Toronto,Toronto CMA,vacant_units,2,250000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-vacant_units
+cma,535,Toronto,Toronto,Toronto CMA,all_units,2,200000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-all_units
+cma,535,Toronto,Toronto,Toronto CMA,vacant_units,3,280000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-vacant_units
+cma,535,Toronto,Toronto,Toronto CMA,all_units,3,230000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-all_units
+csd,3524001,Oakville,Toronto,Zone 23 - Oakville,vacant_units,2,260000,b,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-vacant_units
+csd,3524001,Oakville,Toronto,Zone 23 - Oakville,all_units,2,240000,b,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-all_units
+csd,3524001,Oakville,Toronto,Zone 23 - Oakville,vacant_units,2,270000,a,2024,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-all-2024
+csd,3524001,Oakville,Toronto,Zone 23 - Oakville,vacant_units,3,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-vacant_units
+csd,3524001,Oakville,Toronto,Zone 23 - Oakville,all_units,3,250000,b,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/oakville-all_units
+csd,3521005,Mississauga,Toronto,Mississauga City (Zones 18-20),vacant_units,1,200000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/mississauga-vacant_units
+csd,3521005,Mississauga,Toronto,Mississauga City (Zones 18-20),all_units,1,170000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/mississauga-all_units
+csd,3520005,Toronto,Toronto,City of Toronto (Zones 1-17),vacant_units,1,190000,d,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-vacant_units
+csd,3520005,Toronto,Toronto,City of Toronto (Zones 1-17),all_units,1,175000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/toronto-all_units
+csd,3521024,Caledon,Toronto,Zone 24 - Caledon,vacant_units,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/caledon-vacant_units
+csd,3521024,Caledon,Toronto,Zone 24 - Caledon,all_units,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/caledon-all_units
+csd,3524009,Milton,Toronto,Zone 29 - Milton/Halton Hills,vacant_units,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/milton-vacant_units
+csd,3524009,Milton,Toronto,Zone 29 - Milton/Halton Hills,all_units,2,160000,d,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/milton-all_units
+csd,3525005,Hamilton,Hamilton,Hamilton City (Zones 1-6),vacant_units,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-vacant_units
+csd,3525005,Hamilton,Hamilton,Hamilton City (Zones 1-6),all_units,2,150000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-all_units
+cma,537,Hamilton,Hamilton,Hamilton CMA,vacant_units,2,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-vacant_units
+cma,537,Hamilton,Hamilton,Hamilton CMA,all_units,2,160000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-all_units
+csd,3525005,Hamilton,Hamilton,Hamilton City (Zones 1-6),vacant_units,1,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-vacant_units
+csd,3525005,Hamilton,Hamilton,Hamilton City (Zones 1-6),all_units,1,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-all_units
+cma,537,Hamilton,Hamilton,Hamilton CMA,vacant_units,1,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-vacant_units
+cma,537,Hamilton,Hamilton,Hamilton CMA,all_units,1,140000,a,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/hamilton-all_units
+csd,3524002,Burlington,Hamilton,Zone 8 - Burlington,vacant_units,3,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/burlington-vacant_units
+csd,3524002,Burlington,Hamilton,Zone 8 - Burlington,all_units,3,,,2025,10,SYNTHETIC TEST DATA (not CMHC figures),https://example.invalid/burlington-all_units

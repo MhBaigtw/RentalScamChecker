@@ -18,6 +18,9 @@ def make_settings(
     database_url: str | None = None, photo_dir: Path | None = None, **overrides: object
 ) -> Settings:
     """Settings for tests: explicit pepper and photo folder; the test database by default."""
+    # Defaults that don't depend on the developer's .env (which may enable real signals).
+    overrides.setdefault("enabled_signals", "stub")
+    overrides.setdefault("nominatim_contact_email", None)
     return Settings(
         database_url=database_url or integration_database_url(),
         contact_hash_pepper=SecretStr(TEST_PEPPER),

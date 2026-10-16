@@ -182,8 +182,10 @@ def build_worker(settings: Settings, session_factory: sessionmaker[Session]) -> 
         lease_seconds=settings.job_lease_seconds,
         backoff_base_seconds=settings.job_backoff_base_seconds,
         backoff_max_seconds=settings.job_backoff_max_seconds,
+        job_timeout_seconds=settings.job_timeout_seconds,
+        heartbeat_interval_seconds=settings.worker_heartbeat_interval_seconds,
     )
-    handlers = build_handlers(session_factory, enabled_signals(settings), settings)
+    handlers = build_handlers(session_factory, enabled_signals(settings, session_factory), settings)
     return Worker(session_factory, handlers, config)
 
 
@@ -203,6 +205,7 @@ def _load_check_input(session: Session, check_id: uuid.UUID) -> CheckInput:
         address_text=check.address_text,
         city=check.city,
         submitted_url=check.submitted_url,
+        unit_type=check.unit_type,
     )
 
 
@@ -214,8 +217,21 @@ def _record_result(
     started_at: datetime | None,
     error: str | None,
 ) -> None:
-    """Insert the result; a second write for the same (check, signal, version) is ignored, which
-    makes re-running a signal job harmless (at-least-once delivery)."""
+    """Upsert the result for (check, signal, version), the unique key of signal_results.
+
+    A job can run more than once (at-least-once delivery; a timed-out attempt still running in
+    an abandoned thread, ED-017), so this must be safe to call repeatedly. Rule (ED-020):
+    - no row yet: insert;
+    - existing row is an error and the new result isn't: replace it (a successful retry or a late
+      success beats "could not be completed");
+    - otherwise keep the existing row (first real result wins; an error never replaces a result);
+    - the check is complete: write nothing, the report is final.
+    """
+    check_status = session.execute(
+        select(Check.status).where(Check.id == check_id).with_for_update()
+    ).scalar_one_or_none()
+    if check_status is None or check_status == "complete":
+        return
     values: dict[str, Any] = {
         "id": uuid.uuid4(),
         "check_id": check_id,
@@ -230,10 +246,15 @@ def _record_result(
         "finished_at": _now(),
         "error": error,
     }
+    stmt = insert(SignalResultRow).values(**values)
+    replaceable = [c for c in values if c not in ("id", "check_id", "name", "version")]
     session.execute(
-        insert(SignalResultRow)
-        .values(**values)
-        .on_conflict_do_nothing(constraint="uq_signal_results_check_id_name_version")
+        stmt.on_conflict_do_update(
+            constraint="uq_signal_results_check_id_name_version",
+            set_={column: stmt.excluded[column] for column in replaceable},
+            # SignalResultRow.status is the existing row; stmt.excluded.status the new one.
+            where=(SignalResultRow.status == "error") & (stmt.excluded.status != "error"),
+        )
     )
 
 

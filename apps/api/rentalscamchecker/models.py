@@ -44,12 +44,17 @@ NAMING_CONVENTION = {
 }
 
 CHECK_STATUSES = ("pending", "running", "complete")
+# What is being rented: a whole unit (apartment, house, condo), a room in a shared place, or a
+# basement apartment. CMHC averages describe whole purpose-built units only (ED-021).
+UNIT_TYPES = ("whole_unit", "room", "basement")
 RISK_LEVELS = ("low", "some", "high", "incomplete")
 CONTACT_KINDS = ("phone", "email")
 CONTACT_SOURCES = ("field", "text")
 SIGNAL_STATUSES = ("ok", "skipped", "error")
 SEVERITIES = ("none", "low", "medium", "high")
 JOB_STATUSES = ("queued", "running", "done", "failed", "dead")
+GEOGRAPHY_TYPES = ("cma", "csd")
+RENT_BASES = ("vacant_units", "all_units")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -70,6 +75,7 @@ class Check(Base):
         CheckConstraint(_in("risk_level", RISK_LEVELS), name="risk_level"),
         CheckConstraint("rent_cents > 0", name="rent_positive"),
         CheckConstraint("bedrooms BETWEEN 0 AND 10", name="bedrooms_range"),
+        CheckConstraint(_in("unit_type", UNIT_TYPES), name="unit_type"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -85,6 +91,7 @@ class Check(Base):
     rent_cents: Mapped[int] = mapped_column(Integer)
     # 0 means a studio/bachelor unit.
     bedrooms: Mapped[int] = mapped_column(SmallInteger)
+    unit_type: Mapped[str] = mapped_column(Text, server_default="whole_unit")
     address_text: Mapped[str] = mapped_column(Text)
     city: Mapped[str] = mapped_column(Text)
     # Filled by the geocoder in M3.
@@ -212,23 +219,95 @@ class Job(Base):
 
 
 class ReferenceRent(Base):
-    """CMHC average rent per census metropolitan area and bedroom count (loaded in M3)."""
+    """CMHC Rental Market Survey average rent for one geography, rent basis, bedroom type and
+    survey (M3).
+
+    Geographies: a census metropolitan area (`cma`) or a municipality (census subdivision,
+    `csd`); `source_geography` is the CMHC row the value was read from (a municipality may share a
+    CMHC zone with its neighbours). Rent basis: `vacant_units` (asking rents of empty units) or
+    `all_units` (overall average, mostly sitting tenants). Suppressed values (CMHC "**") are kept
+    with NULL rent and reliability, so the row still links the municipality to its CMA (ED-021).
+    """
 
     __tablename__ = "reference_rents"
     __table_args__ = (
+        CheckConstraint(_in("geography_type", GEOGRAPHY_TYPES), name="geography_type"),
+        CheckConstraint(_in("rent_basis", RENT_BASES), name="rent_basis"),
         CheckConstraint("bedrooms BETWEEN 0 AND 3", name="bedrooms_range"),
+        CheckConstraint("survey_month BETWEEN 1 AND 12", name="survey_month_range"),
+        CheckConstraint("reliability IN ('a', 'b', 'c', 'd')", name="reliability"),
+        CheckConstraint(
+            "(avg_rent_cents IS NULL) = (reliability IS NULL)", name="suppressed_consistently"
+        ),
         UniqueConstraint(
-            "cma", "bedrooms", "survey_year", name="uq_reference_rents_cma_bedrooms_survey_year"
+            "geography_type",
+            "geography_code",
+            "rent_basis",
+            "bedrooms",
+            "survey_year",
+            "survey_month",
+            name="uq_reference_rents_geography_basis_bedrooms_survey",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
-    cma: Mapped[str] = mapped_column(Text)
-    # CMHC buckets: 0 = bachelor, 1, 2, 3 = "3 bedroom +".
+    geography_type: Mapped[str] = mapped_column(Text)
+    # StatCan CSD code for municipalities; HMIP's own id for CMAs.
+    geography_code: Mapped[str] = mapped_column(Text)
+    geography_name: Mapped[str] = mapped_column(Text)
+    cma_name: Mapped[str] = mapped_column(Text)
+    # The CMHC table row the value comes from, e.g. "Zone 29 - Milton/Halton Hills".
+    source_geography: Mapped[str] = mapped_column(Text)
+    rent_basis: Mapped[str] = mapped_column(Text)
+    # CMHC buckets: 0 = studio/bachelor, 1, 2, 3 = "3 bedroom +".
     bedrooms: Mapped[int] = mapped_column(SmallInteger)
-    avg_rent_cents: Mapped[int] = mapped_column(Integer)
+    avg_rent_cents: Mapped[int | None] = mapped_column(Integer)
+    # CMHC letter code: a excellent, b very good, c good, d poor (use with caution).
+    reliability: Mapped[str | None] = mapped_column(Text)
     survey_year: Mapped[int] = mapped_column(SmallInteger)
+    survey_month: Mapped[int] = mapped_column(SmallInteger)
     source: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text)
+
+
+class GeocodeCache(Base):
+    """Raw geocoder responses by normalized query, including empty ones (M3). Nominatim's usage
+    policy requires caching and forbids repeating the same query. Data: OpenStreetMap, ODbL."""
+
+    __tablename__ = "geocode_cache"
+
+    query_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    response: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RateLimit(Base):
+    """Last request time per external service, shared by every worker process (M3). Callers lock
+    the row, wait until the minimum interval has passed, call the service, then update it."""
+
+    __tablename__ = "rate_limits"
+
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    last_request_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WorkerHeartbeat(Base):
+    """One row per worker process: liveness and counters, written every few seconds by the worker
+    and read by the API's /internal/metrics (M3). Rows of stopped workers keep stopped_at."""
+
+    __tablename__ = "worker_heartbeats"
+
+    # "<hostname>:<pid>:<random>", unique per process start.
+    worker_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    concurrency: Mapped[int] = mapped_column(Integer)
+    jobs_done_total: Mapped[int] = mapped_column(Integer)
+    jobs_failed_total: Mapped[int] = mapped_column(Integer)
+    jobs_timed_out_total: Mapped[int] = mapped_column(Integer)
+    abandoned_threads_alive: Mapped[int] = mapped_column(Integer)
 
 
 class LlmCache(Base):

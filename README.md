@@ -34,6 +34,7 @@ off, `pip install` fails inside deeply nested folders (see docs/problems-and-sol
 git clone https://github.com/MhBaigtw/RentalScamChecker.git
 cd RentalScamChecker
 copy .env.example .env
+# then set NOMINATIM_CONTACT_EMAIL in .env (address_sanity needs it; the API won't start without it)
 
 # 1. Database
 docker compose up -d --wait
@@ -43,6 +44,8 @@ cd apps\api
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m alembic upgrade head
+# CMHC reference rents for price_vs_market (licence: data/reference/cmhc/README.md)
+.venv\Scripts\python.exe -m rentalscamchecker.reference_rents ..\..\data\reference\cmhc\rms_average_rent_2025_10.csv
 .venv\Scripts\python.exe -m pytest                 # creates/uses the separate *_test database
 .venv\Scripts\python.exe -m rentalscamchecker      # serves http://127.0.0.1:8100
 cd ..\..
@@ -71,5 +74,6 @@ it resolves to Cygwin). More detail, including the no-Docker fallback:
 
 ## Limitations
 
-Pre-alpha. Listings can be submitted and are processed by the worker, but the only signal is a
-stub that checks nothing; real risk signals start in M3. See TASKS.md for the plan.
+Pre-alpha. Two risk signals run so far: price vs CMHC averages (Sheridan's area only: Toronto and
+Hamilton CMAs) and address checks via OpenStreetMap. Scoring and the report UI come later; see
+TASKS.md for the plan.

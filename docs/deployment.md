@@ -37,6 +37,16 @@ start of M1; the container and its data were intact afterwards).
 - `PHOTO_STORAGE_DIR` (default `var/photos`, relative to the repo root, gitignored): local-disk
   photo storage for development.
 
+## Reference data and external services (M3)
+
+- Load CMHC reference rents after migrating:
+  `python -m rentalscamchecker.reference_rents ../../data/reference/cmhc/rms_average_rent_2025_10.csv`
+  (an upsert; safe to re-run). Without it, price_vs_market returns `skipped` for every check.
+- `NOMINATIM_CONTACT_EMAIL` is required while `address_sanity` is enabled; the API and the worker
+  refuse to start without it. The public Nominatim service allows at most 1 request/s for our
+  whole deployment, which the `rate_limits` row enforces across worker processes (ED-022).
+- `/internal/metrics`: set `INTERNAL_METRICS_TOKEN` in any shared environment (ED-023).
+
 ## Running the worker (M2)
 
 The worker is a second process from the same codebase: `python -m rentalscamchecker.worker`

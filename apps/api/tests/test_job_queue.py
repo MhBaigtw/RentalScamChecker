@@ -21,6 +21,7 @@ FAST = WorkerConfig(
     concurrency=1,
     poll_interval_seconds=0.05,
     lease_seconds=30,
+    job_timeout_seconds=20,
     backoff_base_seconds=0,
     backoff_max_seconds=0,
 )
@@ -129,7 +130,9 @@ def test_two_workers_never_process_the_same_job(session_factory: sessionmaker[Se
     jobs = 200
     add_jobs(session_factory, count=jobs)
     handler = RecordingHandler(sleep=0.002)  # shared, so it sees every run from both workers
-    config = WorkerConfig(concurrency=4, poll_interval_seconds=0.02, lease_seconds=30)
+    config = WorkerConfig(
+        concurrency=4, poll_interval_seconds=0.02, lease_seconds=30, job_timeout_seconds=20
+    )
     workers = [make_worker(session_factory, handler, config) for _ in range(2)]
     threads = [threading.Thread(target=w.run) for w in workers]
     for t in threads:
@@ -203,7 +206,9 @@ def test_failed_job_waits_for_its_backoff_then_succeeds(
 ) -> None:
     add_jobs(session_factory)
     handler = RecordingHandler(fail_times=1)
-    config = WorkerConfig(concurrency=1, lease_seconds=30, backoff_base_seconds=1.0)
+    config = WorkerConfig(
+        concurrency=1, lease_seconds=30, job_timeout_seconds=20, backoff_base_seconds=1.0
+    )
     worker = make_worker(session_factory, handler, config)
 
     assert worker.run_once() is True  # attempt 1 fails
@@ -220,7 +225,9 @@ def test_failed_job_waits_for_its_backoff_then_succeeds(
 
 def test_backoff_doubles_with_each_failed_attempt(session_factory: sessionmaker[Session]) -> None:
     add_jobs(session_factory)
-    config = WorkerConfig(concurrency=1, lease_seconds=30, backoff_base_seconds=0.25)
+    config = WorkerConfig(
+        concurrency=1, lease_seconds=30, job_timeout_seconds=20, backoff_base_seconds=0.25
+    )
     worker = make_worker(session_factory, RecordingHandler(fail_times=3), config)
     gaps = []
     for _ in range(3):
@@ -297,3 +304,105 @@ def test_stop_lets_the_running_job_finish_and_claims_no_more(
 
     assert not thread.is_alive()
     assert statuses(session_factory) == Counter({"done": 1, "queued": 1})
+
+
+# --- per-job timeout (ED-017) ---
+
+
+class SlowFirstAttempt(RecordingHandler):
+    """First run overruns (sleeps `first_sleep`), later runs return at once."""
+
+    def __init__(self, first_sleep: float) -> None:
+        super().__init__()
+        self.first_sleep = first_sleep
+        self.finished: list[int] = []
+
+    def run(self, job: ClaimedJob) -> None:
+        with self._lock:
+            self.calls.append(job.attempts)
+        if job.attempts == 1:
+            time.sleep(self.first_sleep)
+        with self._lock:
+            self.finished.append(job.attempts)
+
+
+def test_job_exceeding_the_timeout_is_failed_and_retried(
+    session_factory: sessionmaker[Session],
+) -> None:
+    add_jobs(session_factory)
+    handler = SlowFirstAttempt(first_sleep=2.0)
+    config = WorkerConfig(
+        concurrency=1, lease_seconds=30, job_timeout_seconds=0.5, backoff_base_seconds=0
+    )
+    worker = make_worker(session_factory, handler, config)
+
+    started = time.monotonic()
+    assert worker.run_once() is True
+    waited = time.monotonic() - started
+
+    assert waited < 1.5  # the worker gave up at the timeout instead of waiting the full 2 s
+    row = job(session_factory)
+    assert (row.status, row.attempts) == ("failed", 1)
+    assert row.last_error == "JobTimeout: did not finish within 0.5 s"
+
+    assert worker.run_once() is True  # retried; attempt 2 is fast
+    assert (job(session_factory).status, job(session_factory).attempts) == ("done", 2)
+
+    # The abandoned first attempt finishes later; it no longer owns the job and changes nothing.
+    time.sleep(2.0)
+    assert handler.finished == [2, 1]
+    assert (job(session_factory).status, job(session_factory).attempts) == ("done", 2)
+
+
+@pytest.mark.parametrize("timeout", [30, 31, 0])
+def test_job_timeout_must_be_positive_and_below_the_lease(timeout: float) -> None:
+    with pytest.raises(ValueError, match="less than the lease"):
+        WorkerConfig(lease_seconds=30, job_timeout_seconds=timeout)
+
+
+class SlowJobZero(RecordingHandler):
+    """Job with payload n=0 runs for `sleep_seconds`; every other job returns at once."""
+
+    def __init__(self, sleep_seconds: float) -> None:
+        super().__init__()
+        self.sleep_seconds = sleep_seconds
+
+    def run(self, job: ClaimedJob) -> None:
+        with self._lock:
+            self.calls.append(job.id)
+        if job.payload["n"] == 0:
+            time.sleep(self.sleep_seconds)
+
+
+def test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """With ONE worker slot: job 0 overruns its 0.5 s timeout (its code runs for 3 s), and job 1
+    must still be processed straight away. The slot is freed at the timeout; only the abandoned
+    helper thread keeps running."""
+    add_jobs(session_factory, count=2)
+    handler = SlowJobZero(sleep_seconds=3.0)
+    config = WorkerConfig(
+        concurrency=1,
+        poll_interval_seconds=0.05,
+        lease_seconds=30,
+        job_timeout_seconds=0.5,
+        backoff_base_seconds=60,  # keep job 0 out of the way after its timeout
+    )
+    worker = make_worker(session_factory, handler, config)
+    thread = threading.Thread(target=worker.run)
+    started = time.monotonic()
+    thread.start()
+    try:
+        while job(session_factory, f"{KIND}:1").status != "done":
+            assert time.monotonic() - started < 2.5, "job 1 waited for the abandoned job 0"
+            time.sleep(0.05)
+        stats = worker.stats()
+        assert (stats.jobs_timed_out_total, stats.abandoned_threads_alive) == (1, 1)
+        assert stats.jobs_done_total == 1
+        assert job(session_factory).status == "failed"  # job 0: retryable, waiting for backoff
+    finally:
+        worker.request_stop()
+        thread.join(timeout=10)
+    time.sleep(3.0)  # job 0's helper thread finishes its sleep
+    assert worker.stats().abandoned_threads_alive == 0

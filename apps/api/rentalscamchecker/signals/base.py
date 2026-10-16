@@ -22,6 +22,8 @@ class CheckInput:
     address_text: str
     city: str
     submitted_url: str | None
+    # "whole_unit" (default), "room" or "basement".
+    unit_type: str = "whole_unit"
 
 
 @dataclass(frozen=True)

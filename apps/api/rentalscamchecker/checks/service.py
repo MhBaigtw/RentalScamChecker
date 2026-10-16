@@ -42,6 +42,7 @@ def create_check(
         listing_text=submission.listing_text,
         rent_cents=submission.rent_cents,
         bedrooms=submission.bedrooms,
+        unit_type=submission.unit_type,
         address_text=submission.address_text,
         city=submission.city,
     )
