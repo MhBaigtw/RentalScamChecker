@@ -6,7 +6,8 @@ from pathlib import Path
 from PIL import Image
 from pydantic import SecretStr
 
-from rentalscamchecker.config import Settings, get_settings
+from rentalscamchecker.config import Settings
+from tests.db import integration_database_url
 
 TEST_PEPPER = "test-pepper-not-a-secret-0123456789abcdef"
 # Port 1 on localhost: nothing listens there, so connecting is refused immediately.
@@ -16,9 +17,9 @@ UNREACHABLE_DB_URL = "postgresql+psycopg://nobody:nopass@127.0.0.1:1/nodb"
 def make_settings(
     database_url: str | None = None, photo_dir: Path | None = None, **overrides: object
 ) -> Settings:
-    """Settings for tests: explicit pepper and photo folder; DB URL from the environment."""
+    """Settings for tests: explicit pepper and photo folder; the test database by default."""
     return Settings(
-        database_url=database_url or get_settings().database_url,
+        database_url=database_url or integration_database_url(),
         contact_hash_pepper=SecretStr(TEST_PEPPER),
         photo_storage_dir=photo_dir or Path("var/test-photos"),
         **overrides,  # type: ignore[arg-type]

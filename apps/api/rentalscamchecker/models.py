@@ -21,6 +21,7 @@ from sqlalchemy import (
     Double,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
@@ -45,6 +46,7 @@ NAMING_CONVENTION = {
 CHECK_STATUSES = ("pending", "running", "complete")
 RISK_LEVELS = ("low", "some", "high", "incomplete")
 CONTACT_KINDS = ("phone", "email")
+CONTACT_SOURCES = ("field", "text")
 SIGNAL_STATUSES = ("ok", "skipped", "error")
 SEVERITIES = ("none", "low", "medium", "high")
 JOB_STATUSES = ("queued", "running", "done", "failed", "dead")
@@ -119,18 +121,25 @@ class CheckPhoto(Base):
 
 
 class CheckContact(Base):
-    """A phone number or email from a check, stored only as an HMAC (ED-004)."""
+    """A phone number or email from a check, stored only as an HMAC (ED-004, ED-016)."""
 
     __tablename__ = "check_contacts"
     __table_args__ = (
         CheckConstraint(_in("kind", CONTACT_KINDS), name="kind"),
+        CheckConstraint(_in("source", CONTACT_SOURCES), name="source"),
         CheckConstraint("octet_length(hmac_hash) = 32", name="hmac_hash_length"),
-        UniqueConstraint("check_id", "kind", name="uq_check_contacts_check_id_kind"),
+        # One row per distinct contact per check, however many times it appears.
+        UniqueConstraint(
+            "check_id", "kind", "hmac_hash", name="uq_check_contacts_check_id_kind_hmac_hash"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(Text)
+    # "field": the contact phone/email form fields. "text": found inside the listing text.
+    # If a value is in both, the single row says "field".
+    source: Mapped[str] = mapped_column(Text)
     hmac_hash: Mapped[bytes] = mapped_column(LargeBinary)
 
     check: Mapped[Check] = relationship(back_populates="contacts")
@@ -164,12 +173,25 @@ class SignalResult(Base):
 
 
 class Job(Base):
-    """Background job queue row (ED-002). The repository and claim index arrive in M2."""
+    """Background job queue row (ED-002, ED-017). Repository: jobs/queue.py.
+
+    Statuses: queued -> running -> done; a failed attempt -> failed (retried at run_after);
+    attempts used up or a permanent error -> dead (dead-letter, kept for inspection)."""
 
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint(_in("status", JOB_STATUSES), name="status"),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+        # The claim query: due jobs in run_after order. Partial, so the index only holds jobs
+        # that can still be claimed; done/dead rows (the vast majority over time) stay out.
+        Index(
+            "ix_jobs_claimable",
+            "run_after",
+            "id",
+            postgresql_where=text("status IN ('queued', 'failed')"),
+        ),
+        # The lease reaper: running jobs by lease expiry.
+        Index("ix_jobs_running_lease", "locked_until", postgresql_where=text("status = 'running'")),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)

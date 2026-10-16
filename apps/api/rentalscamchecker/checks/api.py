@@ -18,6 +18,8 @@ from rentalscamchecker.config import Settings
 from rentalscamchecker.errors import ApiError, FieldError, validation_error
 from rentalscamchecker.images import MAX_PHOTO_BYTES, PhotoRejected, ProcessedPhoto, process_photo
 from rentalscamchecker.models import Check
+from rentalscamchecker.pipeline import enqueue_check_jobs
+from rentalscamchecker.signals.registry import enabled_signals
 from rentalscamchecker.storage import PhotoStorage
 
 MIN_PHOTOS = 1
@@ -47,8 +49,9 @@ class PhotoOut(BaseModel):
 
 
 class ContactOut(BaseModel):
-    # Only the kind: hashes are internal and raw values are never stored.
+    # Kind and source only: hashes are internal and raw values are never stored.
     kind: str
+    source: str
 
 
 class SignalOut(BaseModel):
@@ -79,6 +82,16 @@ def build_router(
 ) -> APIRouter:
     router = APIRouter()
     pepper = settings.contact_hash_pepper.get_secret_value().encode()
+    signals = enabled_signals(settings)
+
+    def enqueue_jobs(session: Session, check_id: uuid.UUID) -> None:
+        enqueue_check_jobs(
+            session,
+            check_id,
+            signals,
+            check_timeout_seconds=settings.check_timeout_seconds,
+            max_attempts=settings.job_max_attempts,
+        )
 
     # Plain `def` (not async): FastAPI runs it in a thread pool, so the blocking DB and
     # image work doesn't stall the event loop.
@@ -114,7 +127,7 @@ def build_router(
             raise validation_error(errors)
 
         with session_factory() as session:
-            check_id = create_check(session, storage, submission, processed, pepper)
+            check_id = create_check(session, storage, submission, processed, pepper, enqueue_jobs)
         return CheckCreated(check_id=check_id)
 
     @router.get("/checks/{check_id}")
@@ -162,7 +175,7 @@ def _to_out(check: Check) -> CheckOut:
             PhotoOut(id=p.id, position=p.position, width=p.width, height=p.height)
             for p in check.photos
         ],
-        contacts=[ContactOut(kind=c.kind) for c in check.contacts],
+        contacts=[ContactOut(kind=c.kind, source=c.source) for c in check.contacts],
         signals=[
             SignalOut(
                 name=s.name,

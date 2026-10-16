@@ -44,3 +44,25 @@ Format: symptom, root cause, fix, lesson.
 - Fix: use `--form-string` for text fields (sent literally), `-F name=@file` only for files.
 - Lesson: when an end-to-end check disagrees with the tests, inspect the raw request before
   changing the code.
+
+## P-006: Status polling looked ~2 s per request slower than the API logs said  (2026-10-16, M2)
+- Symptom: a Python script polling `http://localhost:8100` saw its first response after 4.4 s,
+  while the API's own logs showed requests taking milliseconds.
+- Root cause (likely, not proven): on Windows, `localhost` resolves to `::1` first; uvicorn listens
+  on `127.0.0.1` only, so each new connection waits for the IPv6 attempt to fail before falling
+  back to IPv4.
+- Fix: use `http://127.0.0.1:8100` in scripts. Then: POST 0.12 s, pending -> running -> complete
+  visible at 0.16 s / 0.66 s / 1.72 s.
+- Lesson: when a client-side timing disagrees with server logs, suspect the connection
+  (DNS/IPv6) before the server. Relevant for the web app's `API_URL` too (it uses `localhost`;
+  revisit if server-side fetches look slow).
+
+## P-007: mypy passed on Windows, failed in CI on Linux  (2026-10-16, M2)
+- Symptom: CI's `mypy tests alembic` reported `Module has no attribute "CREATE_NEW_PROCESS_GROUP"`
+  and `"CTRL_BREAK_EVENT"` in `tests/test_worker_process.py`; locally mypy was clean.
+- Root cause: typeshed declares those constants only for Windows. mypy checks for the platform
+  it runs on, and a runtime `IS_WINDOWS` variable doesn't narrow anything for it.
+- Fix: select them under `if sys.platform == "win32": ... else: ...`, a check mypy evaluates
+  statically. Verified locally with `mypy --platform linux` as well as the default.
+- Lesson: platform-specific code needs a type check per platform; `mypy --platform linux` catches
+  this before CI does.

@@ -7,9 +7,16 @@ every problem at once, so the user can fix the whole form in one go.
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 from urllib.parse import urlsplit
 
-from rentalscamchecker.contacts import InvalidContact, normalize_email, normalize_phone
+from rentalscamchecker.contacts import (
+    ContactKind,
+    InvalidContact,
+    extract_contacts,
+    normalize_email,
+    normalize_phone,
+)
 from rentalscamchecker.errors import FieldError
 
 MAX_LISTING_TEXT = 20_000
@@ -41,17 +48,29 @@ class RawSubmission:
     contact_email: str | None = None
 
 
+ContactSource = Literal["field", "text"]
+
+
+@dataclass(frozen=True)
+class Contact:
+    kind: ContactKind
+    # Normalized (E.164 / lowercased) but not yet hashed. Lives in memory only for the request.
+    value: str
+    source: ContactSource
+
+
 @dataclass(frozen=True)
 class ValidSubmission:
+    # With every phone number and email replaced by [phone] / [email] (ED-016).
     listing_text: str
     rent_cents: int
     bedrooms: int
     address_text: str
     city: str
     submitted_url: str | None
-    # Normalized but not yet hashed. Lives in memory only for the duration of the request.
-    phone_e164: str | None
-    email_normalized: str | None
+    # Distinct by (kind, value): a number given in the phone field and repeated in the text
+    # appears once, with source "field".
+    contacts: list[Contact]
 
 
 def validate_submission(raw: RawSubmission, phone_region: str) -> ValidSubmission:
@@ -79,16 +98,46 @@ def validate_submission(raw: RawSubmission, phone_region: str) -> ValidSubmissio
     # All required validators returned values (they raise otherwise); assert for the type checker.
     assert listing_text is not None and rent_cents is not None and bedrooms is not None  # noqa: S101
     assert address_text is not None and city is not None  # noqa: S101
+    extracted = extract_contacts(listing_text, phone_region)
+    contacts = _merge_contacts(
+        field_phone=phone,
+        field_email=email,
+        text_phones=extracted.phones,
+        text_emails=extracted.emails,
+    )
     return ValidSubmission(
-        listing_text=listing_text,
+        listing_text=extracted.redacted,
         rent_cents=rent_cents,
         bedrooms=bedrooms,
         address_text=address_text,
         city=city,
         submitted_url=submitted_url,
-        phone_e164=phone,
-        email_normalized=email,
+        contacts=contacts,
     )
+
+
+def _merge_contacts(
+    field_phone: str | None,
+    field_email: str | None,
+    text_phones: list[str],
+    text_emails: list[str],
+) -> list[Contact]:
+    """Field values first, then text values not already present."""
+    candidates: list[Contact] = []
+    if field_phone is not None:
+        candidates.append(Contact("phone", field_phone, "field"))
+    if field_email is not None:
+        candidates.append(Contact("email", field_email, "field"))
+    candidates += [Contact("phone", value, "text") for value in text_phones]
+    candidates += [Contact("email", value, "text") for value in text_emails]
+
+    merged: list[Contact] = []
+    seen: set[tuple[str, str]] = set()
+    for contact in candidates:
+        if (contact.kind, contact.value) not in seen:
+            seen.add((contact.kind, contact.value))
+            merged.append(contact)
+    return merged
 
 
 def _blank(value: str | None) -> bool:

@@ -37,6 +37,15 @@ start of M1; the container and its data were intact afterwards).
 - `PHOTO_STORAGE_DIR` (default `var/photos`, relative to the repo root, gitignored): local-disk
   photo storage for development.
 
+## Running the worker (M2)
+
+The worker is a second process from the same codebase: `python -m rentalscamchecker.worker`
+(from `apps/api`, through the venv). Without it, checks stay `pending`. Settings
+(`WORKER_CONCURRENCY`, `JOB_LEASE_SECONDS`, `CHECK_TIMEOUT_SECONDS`, ...) are listed in
+`.env.example`. Stopping: Ctrl+C (or SIGTERM in production) lets running jobs finish, then
+exits 0. A hard kill is also safe: the interrupted job is handed out again when its lease
+expires (default 60 s). Run more worker processes to scale out.
+
 ## Fallback: no Docker
 
 Use this only if Docker Desktop stops working. Not exercised in M0 because Docker worked.

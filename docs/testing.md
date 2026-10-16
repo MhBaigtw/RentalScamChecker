@@ -12,32 +12,66 @@ Run from `apps/api` with the venv's interpreter (`.venv\Scripts\python.exe` on W
 | Types (tests, migrations) | `python -m mypy tests alembic` |
 | Tests | `python -m pytest -v` |
 
-Tests marked `integration` need Postgres at `DATABASE_URL` (start it with `docker compose up -d`).
-They are **not** skipped when the DB is missing; they fail, so a missing DB can't be mistaken for
-a pass.
+Tests marked `integration` need the Postgres server from `DATABASE_URL` (start it with
+`docker compose up -d`). They are **not** skipped when the DB is missing; they fail, so a missing
+DB can't be mistaken for a pass.
 
-Integration tests write to the database they run against and don't clean up (rows are scoped
-by fresh UUIDs, so tests don't interfere with each other). Locally that is the dev database. Photo
-files go to a per-test `tmp_path`.
+### The test database (dev data and test data never mix)
 
-Current tests (M1): 83 total, all passing locally on 2026-10-16; 5 of them are `integration`
-(real Postgres).
+Integration tests never touch the dev database. They use a separate database on the same server
+(`tests/db.py`, fixtures in `tests/conftest.py`):
+
+- Name: `TEST_DATABASE_URL` if set, otherwise `DATABASE_URL` with `_test` appended to the database
+  name (locally `rentalscamchecker_test`). Anything whose name doesn't end in `_test` is refused
+  before any connection is made (`test_db_guard.py`).
+- Once per test session (`test_database` fixture): `CREATE DATABASE` if missing (needs a role
+  allowed to create databases, which `rsc` is in Docker and in CI), `alembic upgrade head` run from
+  code, then `TRUNCATE` of every table in case an earlier run was interrupted.
+- After **every** test marked `integration` (autouse fixture): `TRUNCATE ... RESTART IDENTITY
+  CASCADE` on every model table. Tests that aren't marked `integration` never trigger any of
+  this, so the unit suite runs without a database.
+- Photo files go to a per-test `tmp_path`.
+
+Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, with 13 checks. After
+it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
+database still had the same 13. A second run against the existing test database also passed.
+
+Current tests (M2): 127 total, all passing locally on 2026-10-16 (Windows); 25 of them are
+`integration` (real Postgres). The full suite takes about 45 s, mostly real waits for leases,
+backoffs and the worker process.
 
 | File | Kind | Covers |
 |---|---|---|
 | `test_health.py` (4) | unit + 1 integration | error shape, `/health` up/down, request id echo |
-| `test_contacts.py` (22) | unit | phone formats → one E.164 value, foreign numbers, invalid phones/emails, email lowercasing, HMAC deterministic / depends on pepper / depends on kind |
-| `test_validation.py` (27) | unit | cleaned output, all missing fields reported at once, rent formats and bad rents (incl. NaN/Infinity, 3 decimals), bedrooms, URL schemes, length limits, per-field contact errors |
+| `test_contacts.py` (27) | unit | phone formats → one E.164 value, foreign numbers, invalid phones/emails, email lowercasing, HMAC deterministic / depends on pepper / depends on kind; extraction from text: common formats, no false positives on prices/dates/postal codes/units, digits inside an email, repeats listed once but all redacted, 10-per-kind cap |
+| `test_validation.py` (30) | unit | cleaned output, all missing fields reported at once, rent formats and bad rents (incl. NaN/Infinity, 3 decimals), bedrooms, URL schemes, length limits, per-field contact errors; text contacts redacted; same number in field and text → one contact (`field`) |
+| `test_jobs_unit.py` (10) | unit | backoff doubling and cap; enabled-signal parsing, empty list, unknown name fails at startup; stub signal's fixed result |
+| `test_job_queue.py` (12) | integration | idempotent enqueue; `run_after` respected; **a row being claimed is skipped, not waited for** (two open transactions, `lock_timeout` 2 s); **2 workers × 4 threads process 200 jobs: each exactly once**; **crashed job re-claimed after its 1 s lease expires**, and the crashed worker's late complete/fail are rejected (fencing); crash on the last attempt → dead via the reaper; **backoff: run_after − updated_at is exactly 1 s, then 0.25/0.5/1 s doubling**, job not claimable before; **poison job → dead after max_attempts** with last_error and one on_dead call; permanent error → dead after 1 attempt; unknown kind → dead; in-process stop lets the running job finish and claims no more |
+| `test_pipeline.py` (6) | integration | aggregator starts as soon as the last signal is done (an hour before its timeout); dead signal → error result + check `incomplete`; **check timeout finalizes without the missing signal**, and its late result is ignored; running a signal job twice stores one result; no signals → complete immediately; **end to end: POST /checks → jobs committed with ids-only payloads → worker → GET shows `complete` with the stub result** |
+| `test_worker_process.py` (1) | integration | the real `python -m rentalscamchecker.worker` process: stop signal sent while the stub job runs (SIGTERM on Linux; CTRL_BREAK on Windows, where SIGTERM can't be delivered) → job finishes `done`, the aggregator it made due stays `queued`, exit code 0, log order `shutdown_requested` < `job_done`, last line `worker_stopped` |
+| `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
-| `test_checks_api.py` (9) | 5 without DB + 4 integration | empty form lists every error; 11 photos; bad photo reported by index and no file written; bad UUID and unknown route use the error shape; **3-photo check created and read back** with stored files verified EXIF-free; **raw contacts absent from every row of the check** and stored hashes equal the expected HMACs; contacts optional; unknown id → 404 shape |
+| `test_checks_api.py` (10) | 5 without DB + 5 integration | empty form lists every error; 11 photos; bad photo reported by index and no file written; bad UUID and unknown route use the error shape; **3-photo check created and read back** with stored files verified EXIF-free; **raw contacts (fields and inside the text) absent from every row of the check**, with the expected HMACs and sources; **same number in field and text → one link**; contacts optional; unknown id → 404 shape |
+
+**Mutation checks (M2).** Each time the code was broken on purpose and the named test was run;
+it failed each time, then passed again once the code was restored:
+- `FOR UPDATE SKIP LOCKED` → `FOR UPDATE`: `test_a_row_being_claimed_is_skipped_not_waited_for`
+  fails (lock timeout).
+- fencing removed from complete/fail: `test_crashed_job_is_reclaimed_after_its_lease_expires`
+  fails.
+- reaper never dead-letters: `test_job_crashing_on_its_last_attempt_is_dead_lettered` fails.
+- aggregator never pulled forward: `test_aggregator_starts_as_soon_as_all_signals_are_done` fails.
+- SIGBREAK handler removed: `test_stop_signal_lets_the_running_job_finish` fails on Windows.
 
 The raw-contact test was checked to be able to fail: a throwaway copy with the phone number
 placed in `listing_text` failed as expected (see docs/database-design.md "Known gap").
 
 Not covered: concurrent submissions; storage write failure part-way (cleanup path is code-reviewed,
-not tested); real phone photos (HEIC, large JPEGs). Integration tests don't run on a clean
-database, so they can't assert global row counts.
+not tested); real phone photos (HEIC, large JPEGs); a DB outage while the worker runs (the loop
+catches and logs it, not tested); throughput under load (M9). Timing-based queue tests (leases,
+backoff) use real sleeps of 0.25 to 1.5 s with margins; they haven't been flaky in the runs so
+far, but they depend on the machine not stalling for more than the margin.
 
 ## Web (`apps/web`)
 

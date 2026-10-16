@@ -1,8 +1,10 @@
 import pytest
 
 from rentalscamchecker.contacts import (
+    MAX_TEXT_CONTACTS_PER_KIND,
     InvalidContact,
     contact_hash,
+    extract_contacts,
     normalize_email,
     normalize_phone,
 )
@@ -67,3 +69,56 @@ def test_contact_hash_depends_on_pepper() -> None:
 
 def test_contact_hash_depends_on_kind() -> None:
     assert contact_hash("phone", "same", b"p") != contact_hash("email", "same", b"p")
+
+
+def test_extract_finds_phones_in_common_formats() -> None:
+    text = "Call 416-555-0123, (905) 555-0142, +1 647 555 0199 or 6475550188. UK: +44 20 7946 0958"
+
+    result = extract_contacts(text, "CA")
+
+    assert result.phones == [
+        "+14165550123",
+        "+19055550142",
+        "+16475550199",
+        "+16475550188",
+        "+442079460958",
+    ]
+    assert result.redacted == "Call [phone], [phone], [phone] or [phone]. UK: [phone]"
+
+
+def test_extract_leaves_prices_dates_postal_codes_and_units_alone() -> None:
+    text = (
+        "Rent $1,850/month, available 2026-11-01. 2 bed, 1 bath, 850 sq ft. "
+        "Postal L6H 2L1. Unit 1430-2201. Deposit 1850 + first 1850 = 3700."
+    )
+
+    result = extract_contacts(text, "CA")
+
+    assert result.phones == []
+    assert result.emails == []
+    assert result.redacted == text
+
+
+def test_digits_inside_an_email_are_not_also_a_phone() -> None:
+    result = extract_contacts("Reach me: 4165550123@Gmail.com", "CA")
+
+    assert result.emails == ["4165550123@gmail.com"]
+    assert result.phones == []
+    assert result.redacted == "Reach me: [email]"
+
+
+def test_repeated_contacts_are_listed_once_but_every_occurrence_is_redacted() -> None:
+    result = extract_contacts("a@b.ca 416-555-0123 A@B.CA 4165550123", "CA")
+
+    assert result.emails == ["a@b.ca"]
+    assert result.phones == ["+14165550123"]
+    assert result.redacted == "[email] [phone] [email] [phone]"
+
+
+def test_at_most_ten_distinct_contacts_per_kind_are_kept_but_all_are_redacted() -> None:
+    text = " ".join(f"416-555-01{i:02d}" for i in range(15))
+
+    result = extract_contacts(text, "CA")
+
+    assert len(result.phones) == MAX_TEXT_CONTACTS_PER_KIND
+    assert result.redacted == " ".join(["[phone]"] * 15)

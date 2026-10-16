@@ -37,13 +37,13 @@ documented error shape; raw contact values are not in the database (verified by 
 
 ## M2 — Job queue and worker (weeks 2–3)
 
-- [ ] `jobs` table and repository: enqueue (idempotent on key), claim with
+- [x] `jobs` table and repository: enqueue (idempotent on key), claim with
       `FOR UPDATE SKIP LOCKED`, lease/visibility timeout, complete, fail with backoff, dead-letter.
-- [ ] Worker entrypoint with graceful shutdown (SIGTERM finishes current job) and concurrency setting.
-- [ ] Orchestration: `POST /checks` enqueues one job per enabled signal; aggregator job runs when
+- [x] Worker entrypoint with graceful shutdown (SIGTERM finishes current job) and concurrency setting.
+- [x] Orchestration: `POST /checks` enqueues one job per enabled signal; aggregator job runs when
       all signal jobs are terminal or a check-level timeout passes.
-- [ ] A stub signal that sleeps and returns a fixed result, to exercise the pipeline.
-- [ ] Tests: two workers never process the same job; a crashed job is re-claimed after its lease
+- [x] A stub signal that sleeps and returns a fixed result, to exercise the pipeline.
+- [x] Tests: two workers never process the same job; a crashed job is re-claimed after its lease
       expires; retries back off; poison job goes to dead-letter.
 
 Done when: those concurrency tests pass against real Postgres, and a check created via the API
@@ -157,3 +157,16 @@ outside Claude Code.
   phone or email. CI run 38968326188 green (both jobs; one pull_request run, no duplicate push run;
   83 passed, `alembic check` no drift). CI fix (push trigger → main only) is its own commit aff0c3c;
   M1 commits d148ee8 (code) + 3c396aa (docs) on branch m1-domain-model, PR #2.
+- 2026-10-16, M2 (branch m2-job-queue, PR #3). Before M2: contacts in listing_text extracted/hashed/redacted
+  (fdd851d, ED-016; psql: 0 rows in checks/check_contacts/check_photos/signal_results/jobs contain the raw
+  phone or email placed in the text; field+text duplicate → 1 row) and a separate auto-created test DB
+  (ab64916; dev DB had the same 13 checks before and after a test run, test DB empty after it).
+  M2 (3caeba7 + docs 6b0cb8e + mypy fix): migrations 0003/0004 round-trip, `alembic check` no drift; ruff ok, mypy
+  strict ok (also `--platform linux`); pytest 127/127 locally (25 integration) and in CI run 38974250488
+  (both jobs green; worker-process test via SIGTERM on Linux, CTRL_BREAK on Windows). Done-when tests pass on
+  real Postgres: 2 workers × 4 threads ran 200 jobs exactly once each; crashed job re-claimed after its 1 s
+  lease, late complete/fail rejected; backoff 0.25/0.5/1 s exact; poison job dead after 3 attempts.
+  Mutation checks (SKIP LOCKED, fencing, reaper, pull-forward, SIGBREAK) each made their test fail. Live API +
+  worker on :8100: POST 202 → pending 0.16 s → running 0.66 s → complete 1.72 s with the stub result; aggregate
+  job pulled forward from 120 s to 1.78 s. EXPLAIN (202k jobs): claim 0.45 ms via ix_jobs_claimable vs 77 ms
+  seq scan.

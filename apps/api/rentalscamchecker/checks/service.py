@@ -1,13 +1,14 @@
 """Create and load checks. Owns the order of writes between photo storage and the database."""
 
 import uuid
+from collections.abc import Callable
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from rentalscamchecker.checks.validation import ValidSubmission
-from rentalscamchecker.contacts import ContactKind, contact_hash
+from rentalscamchecker.contacts import contact_hash
 from rentalscamchecker.images import ProcessedPhoto
 from rentalscamchecker.models import Check, CheckContact, CheckPhoto
 from rentalscamchecker.storage import PhotoStorage
@@ -25,9 +26,10 @@ def create_check(
     submission: ValidSubmission,
     photos: list[ProcessedPhoto],
     pepper: bytes,
+    enqueue_jobs: Callable[[Session, uuid.UUID], None],
 ) -> uuid.UUID:
-    """Store the photos, then insert the check, its photos and its contact hashes in one
-    transaction.
+    """Store the photos, then insert the check, its photos, its contact hashes and its background
+    jobs (`enqueue_jobs`) in one transaction: a check never exists without its jobs.
 
     Files are written first: if the commit fails we delete them, so we never have rows pointing
     at missing files. (A crash between the two steps can leave orphan files without rows; the
@@ -61,6 +63,7 @@ def create_check(
             )
         check.contacts.extend(_contact_rows(submission, pepper))
         session.add(check)
+        enqueue_jobs(session, check_id)
         session.commit()
     except Exception:
         session.rollback()
@@ -71,20 +74,15 @@ def create_check(
         "check_created",
         check_id=str(check_id),
         photos=len(photos),
-        contacts=[c.kind for c in check.contacts],
+        contacts=[f"{c.kind}:{c.source}" for c in check.contacts],
     )
     return check_id
 
 
 def _contact_rows(submission: ValidSubmission, pepper: bytes) -> list[CheckContact]:
-    values: list[tuple[ContactKind, str | None]] = [
-        ("phone", submission.phone_e164),
-        ("email", submission.email_normalized),
-    ]
     return [
-        CheckContact(kind=kind, hmac_hash=contact_hash(kind, value, pepper))
-        for kind, value in values
-        if value is not None
+        CheckContact(kind=c.kind, source=c.source, hmac_hash=contact_hash(c.kind, c.value, pepper))
+        for c in submission.contacts
     ]
 
 
