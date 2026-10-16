@@ -2,6 +2,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import sqlalchemy as sa
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.db import (
     ensure_database_exists,
@@ -35,3 +37,11 @@ def _clean_test_database(request: pytest.FixtureRequest) -> Iterator[None]:
     url: str = request.getfixturevalue("test_database")
     yield
     truncate_all_tables(url)
+
+
+@pytest.fixture
+def session_factory(test_database: str) -> Iterator[sessionmaker[Session]]:
+    """Sessions on the (empty, migrated) test database."""
+    engine = sa.create_engine(test_database)
+    yield sessionmaker(engine, expire_on_commit=False)
+    engine.dispose()

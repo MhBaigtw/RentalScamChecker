@@ -1,6 +1,7 @@
 """Create and load checks. Owns the order of writes between photo storage and the database."""
 
 import uuid
+from collections.abc import Callable
 
 import structlog
 from sqlalchemy import select
@@ -25,9 +26,10 @@ def create_check(
     submission: ValidSubmission,
     photos: list[ProcessedPhoto],
     pepper: bytes,
+    enqueue_jobs: Callable[[Session, uuid.UUID], None],
 ) -> uuid.UUID:
-    """Store the photos, then insert the check, its photos and its contact hashes in one
-    transaction.
+    """Store the photos, then insert the check, its photos, its contact hashes and its background
+    jobs (`enqueue_jobs`) in one transaction: a check never exists without its jobs.
 
     Files are written first: if the commit fails we delete them, so we never have rows pointing
     at missing files. (A crash between the two steps can leave orphan files without rows; the
@@ -61,6 +63,7 @@ def create_check(
             )
         check.contacts.extend(_contact_rows(submission, pepper))
         session.add(check)
+        enqueue_jobs(session, check_id)
         session.commit()
     except Exception:
         session.rollback()

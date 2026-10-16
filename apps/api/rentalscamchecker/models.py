@@ -21,6 +21,7 @@ from sqlalchemy import (
     Double,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
@@ -172,12 +173,25 @@ class SignalResult(Base):
 
 
 class Job(Base):
-    """Background job queue row (ED-002). The repository and claim index arrive in M2."""
+    """Background job queue row (ED-002, ED-017). Repository: jobs/queue.py.
+
+    Statuses: queued -> running -> done; a failed attempt -> failed (retried at run_after);
+    attempts used up or a permanent error -> dead (dead-letter, kept for inspection)."""
 
     __tablename__ = "jobs"
     __table_args__ = (
         CheckConstraint(_in("status", JOB_STATUSES), name="status"),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+        # The claim query: due jobs in run_after order. Partial, so the index only holds jobs
+        # that can still be claimed; done/dead rows (the vast majority over time) stay out.
+        Index(
+            "ix_jobs_claimable",
+            "run_after",
+            "id",
+            postgresql_where=text("status IN ('queued', 'failed')"),
+        ),
+        # The lease reaper: running jobs by lease expiry.
+        Index("ix_jobs_running_lease", "locked_until", postgresql_where=text("status = 'running'")),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)

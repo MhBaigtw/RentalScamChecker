@@ -1,1 +1,1 @@
-"""One module per risk signal (see SPEC.md section 4). Signals are added from M2 onward."""
+"""One module per risk signal (SPEC.md section 4). Interface in base.py, list in registry.py."""
