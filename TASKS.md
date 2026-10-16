@@ -37,13 +37,13 @@ documented error shape; raw contact values are not in the database (verified by 
 
 ## M2 — Job queue and worker (weeks 2–3)
 
-- [ ] `jobs` table and repository: enqueue (idempotent on key), claim with
+- [x] `jobs` table and repository: enqueue (idempotent on key), claim with
       `FOR UPDATE SKIP LOCKED`, lease/visibility timeout, complete, fail with backoff, dead-letter.
-- [ ] Worker entrypoint with graceful shutdown (SIGTERM finishes current job) and concurrency setting.
-- [ ] Orchestration: `POST /checks` enqueues one job per enabled signal; aggregator job runs when
+- [x] Worker entrypoint with graceful shutdown (SIGTERM finishes current job) and concurrency setting.
+- [x] Orchestration: `POST /checks` enqueues one job per enabled signal; aggregator job runs when
       all signal jobs are terminal or a check-level timeout passes.
-- [ ] A stub signal that sleeps and returns a fixed result, to exercise the pipeline.
-- [ ] Tests: two workers never process the same job; a crashed job is re-claimed after its lease
+- [x] A stub signal that sleeps and returns a fixed result, to exercise the pipeline.
+- [x] Tests: two workers never process the same job; a crashed job is re-claimed after its lease
       expires; retries back off; poison job goes to dead-letter.
 
 Done when: those concurrency tests pass against real Postgres, and a check created via the API

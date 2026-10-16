@@ -26,7 +26,8 @@ Implemented in `errors.py`: `ApiError` for errors we raise; handlers convert Fas
 ## `POST /checks`
 
 `multipart/form-data`. Returns `202 {"check_id": "<uuid>"}`. 202 rather than 201 because the
-check has been accepted but not processed: from M2 on, the signals run in the background.
+check has been accepted but not processed: the signals run in the background (worker, M2). The
+signal and aggregate jobs are enqueued in the same transaction as the check.
 
 | Field | Required | Rules |
 |---|---|---|
@@ -61,6 +62,12 @@ If the insert fails, the files just written are deleted.
   "signals": []
 }
 ```
+
+`status` moves `pending` (accepted, no signal started) → `running` (first signal job started) →
+`complete` (aggregator finished). `signals` lists each finished signal's result; a signal that
+failed permanently or didn't finish before the check timeout appears with `status: "error"`.
+`risk_level` is `"incomplete"` when any signal errored, otherwise `null` until scoring exists (M7).
+Clients poll this endpoint until `status` is `complete`.
 
 Contacts expose only kind and source (`field` or `text`): the hash is internal and the raw value
 no longer exists. `listing.listing_text` is the redacted text.

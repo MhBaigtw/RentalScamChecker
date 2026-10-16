@@ -43,16 +43,21 @@ cd apps\api
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m alembic upgrade head
-.venv\Scripts\python.exe -m pytest
+.venv\Scripts\python.exe -m pytest                 # creates/uses the separate *_test database
 .venv\Scripts\python.exe -m rentalscamchecker      # serves http://127.0.0.1:8100
 cd ..\..
 
-# 3. Web (second terminal)
+# 3. Worker (second terminal): runs the background signal jobs
+cd apps\api
+.venv\Scripts\python.exe -m rentalscamchecker.worker   # Ctrl+C: finishes running jobs, then exits
+cd ..\..
+
+# 4. Web (third terminal)
 cd apps\web
 npm ci
 npm run dev                                        # serves http://localhost:3100
 
-# 4. Pre-commit hooks (once, from the repo root)
+# 5. Pre-commit hooks (once, from the repo root)
 apps\api\.venv\Scripts\pre-commit.exe install
 ```
 
@@ -66,4 +71,5 @@ it resolves to Cygwin). More detail, including the no-Docker fallback:
 
 ## Limitations
 
-Pre-alpha. No risk checks are implemented yet; see TASKS.md for the plan.
+Pre-alpha. Listings can be submitted and are processed by the worker, but the only signal is a
+stub that checks nothing; real risk signals start in M3. See TASKS.md for the plan.

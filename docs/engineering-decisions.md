@@ -37,7 +37,7 @@ should fill in "Code locations" once the code exists.
   concurrency behaviour is explicit and testable, which is valuable to explain in interviews.
 - Trade-offs: lower throughput ceiling than a dedicated broker and polling adds latency; this is
   acceptable at student-tool scale. Must be load tested in M9 and the numbers recorded.
-- Code locations: TBD
+- Code locations: `apps/api/rentalscamchecker/jobs/` (M2; details in ED-017 to ED-019)
 
 ## ED-003: Python for the API and ML, TypeScript for the web app  (2026-10-15, pre-M0)
 - Problem / decision: languages per component.
@@ -216,3 +216,80 @@ should fill in "Code locations" once the code exists.
 - Code locations: `apps/api/rentalscamchecker/contacts.py` (`extract_contacts`),
   `checks/validation.py` (`_merge_contacts`), `models.py` (`CheckContact.source`),
   `alembic/versions/0003_contact_source.py`
+
+## ED-017: Queue semantics: at-least-once, leases, attempt-number fencing, reaper  (2026-10-16, M2)
+- Problem / decision: what guarantees the jobs table gives, and how crashes, retries and stale
+  workers are handled.
+- Alternatives considered: holding the row lock (open transaction) for the whole job instead of a
+  lease; exactly-once by doing the work and the completion in one transaction; jitter in backoff;
+  a heartbeat that extends leases for long jobs; the `procrastinate` library.
+- Chosen:
+  - **Claim**: one `UPDATE ... WHERE id = (SELECT ... ORDER BY run_after, id LIMIT 1 FOR UPDATE
+    SKIP LOCKED) RETURNING ...`, committed immediately. It sets `status = 'running'`,
+    `attempts + 1` and `locked_until = now() + lease`. After the commit the lease, not a lock,
+    reserves the job.
+  - **Statuses**: `failed` means "the last attempt failed and the job will be retried at
+    `run_after`"; claimable like `queued`. `dead` is the dead-letter state: attempts used up, a
+    `PermanentJobError`, or no handler. `last_error` is kept.
+  - **Backoff**: `min(max, base * 2^(attempt-1))`, defaults 2 s and 300 s. No jitter.
+  - **Reaper**: every poll, `running` jobs past `locked_until` go back to `failed` (due now), or
+    to `dead` if that was the last attempt. A crash therefore costs an attempt, so a job that
+    kills the worker every time is dead-lettered instead of looping forever.
+  - **Fencing**: `complete`/`fail` only apply `WHERE status = 'running' AND attempts = <attempt
+    the worker claimed>`. A worker whose lease expired and whose job was re-claimed gets "not
+    owned" back and changes nothing.
+  - **At-least-once delivery**: a job can run twice (crash after the work but before `complete`;
+    a lease expiring mid-run), so handlers must be idempotent. Ours insert results with
+    `ON CONFLICT DO NOTHING` on `(check_id, name, version)`.
+- Why: short transactions (claims don't hold connections or locks during slow network calls);
+  each failure mode has one explicit, tested rule. Jitter only matters when many clients retry
+  against one service at the same moment, which isn't the case here.
+- Trade-offs: no heartbeat, so `JOB_LEASE_SECONDS` (60 s) must exceed the slowest signal; a
+  signal that hangs past it runs twice. Python can't kill a hung thread, so signals must use their
+  own network timeouts (M3/M4). The reaper runs on every poll of every thread, which is cheap
+  thanks to its partial index but redundant; fine at this scale.
+- Code locations: `apps/api/rentalscamchecker/jobs/queue.py`, `jobs/worker.py`
+
+## ED-018: Aggregator enqueued at the check timeout, started early when every signal is done  (2026-10-16, M2)
+- Problem / decision: how the aggregator knows to run "when all signal jobs are terminal or a
+  check-level timeout passes" (TASKS M2).
+- Alternatives considered: an aggregator job that polls (re-enqueues itself every few seconds
+  until done); a scheduler process that scans for finished checks; counting job rows by a
+  `check_id` column on `jobs`.
+- Chosen: `POST /checks` enqueues, in the same transaction as the check, one `signal` job per
+  enabled signal and one `aggregate` job due at `now() + CHECK_TIMEOUT_SECONDS`. That job's payload
+  lists the expected (signal, version) pairs. Whenever a signal result is written (success, or the
+  error result written when a signal job is dead-lettered), the same transaction locks the check
+  row (`SELECT ... FOR UPDATE`), compares recorded results with the expected list and, if all are
+  present, sets the aggregate job's `run_after = now()`. The aggregator locks the check, writes an
+  error result ("did not finish before the check timeout") for each missing signal, and marks the
+  check `complete`, with `risk_level = 'incomplete'` if any expected signal errored. If the
+  aggregate job itself is dead-lettered, the check is closed as `incomplete` so the UI doesn't poll
+  forever.
+- Why: no polling and no extra process; the timeout is just the job's due time. Locking the
+  check row serializes concurrent signal completions for the same check, so two signals finishing
+  at once can't both miss each other's result (without the lock the aggregator would still run,
+  but only at the timeout).
+- Trade-offs: the check row lock adds a little contention per check (signals of one check are few).
+  A signal finishing after the timeout is ignored for that report: its insert hits the existing
+  error row. `risk_level` stays NULL on a complete check until scoring exists (M7). Checks created
+  before M2 have no jobs and stay `pending`.
+- Code locations: `apps/api/rentalscamchecker/pipeline.py`, `checks/api.py`, `checks/service.py`
+
+## ED-019: Worker = threads in one process; graceful stop on SIGTERM/SIGINT/SIGBREAK  (2026-10-16, M2)
+- Problem / decision: how the worker runs jobs concurrently and shuts down.
+- Alternatives considered: asyncio (all code is sync SQLAlchemy and sync signal libraries);
+  one process per job slot (multiprocessing); a pool of processes.
+- Chosen: `python -m rentalscamchecker.worker` starts `WORKER_CONCURRENCY` threads, each looping
+  reap -> claim -> run -> complete/fail, sleeping `WORKER_POLL_INTERVAL_SECONDS` when the queue is
+  empty. SIGTERM, SIGINT and (Windows) SIGBREAK set a stop event: running jobs finish, no new job
+  is claimed, the process exits 0. The main thread joins with a timeout so it keeps handling
+  signals. Every log line during a job carries `job_id` and `job_kind` (structlog contextvars are
+  per thread).
+- Why: the work is I/O-bound (DB, network APIs), where threads are enough despite the GIL; the
+  CPU-heavy image embedding in M5 may need processes. Scale out with more worker processes;
+  SKIP LOCKED makes that safe (tested with 2 workers x 4 threads).
+- Trade-offs: polling adds up to one poll interval of latency (LISTEN/NOTIFY could remove it).
+  On Windows, SIGTERM can't be delivered to another process (it becomes TerminateProcess), so the
+  graceful path is tested there with CTRL_BREAK; production (Linux) uses SIGTERM, also tested in CI.
+- Code locations: `apps/api/rentalscamchecker/worker.py`, `jobs/worker.py`
