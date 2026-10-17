@@ -14,6 +14,7 @@ fails if the models and the migrations have drifted apart.
 | `0003_contact_source` | M2 | `check_contacts.source`; unique `(check_id, kind)` → `(check_id, kind, hmac_hash)`; data step redacts contacts in existing `listing_text` and hashes them in (ED-016). Hand-written (autogenerate misses CHECK constraints). |
 | `0005_reference_rents_geocoding` | M3 | `reference_rents` re-created by geography level and rent basis (never loaded before; the upgrade refuses if it has rows); `geocode_cache`; `rate_limits`. Hand-written. Round trip and `alembic check` verified. |
 | `0006_check_unit_type` | M3 | `checks.unit_type` (`whole_unit` default, `room`, `basement`) with a CHECK. Hand-written. Round trip verified. |
+| `0008_llm_calls` | M4 | `llm_calls` (+ index on `called_at`) for the daily cap and spend auditing. Round trip verified. |
 | `0007_worker_heartbeats` | M3 | `worker_heartbeats` for `/internal/metrics`. Round trip verified. |
 | `0004_job_queue_indexes` | M2 | Partial indexes `ix_jobs_claimable`, `ix_jobs_running_lease` (below). Round trip and `alembic check` verified. |
 
@@ -31,7 +32,7 @@ fails if the models and the migrations have drifted apart.
 - **Child rows** (`check_photos`, `check_contacts`, `signal_results`) reference `checks.id` with
   `ON DELETE CASCADE`: deleting a check removes everything about it in one statement.
 
-## Tables (after M3)
+## Tables (after M4)
 
 ### `checks`: one submitted listing and, later, its report
 | Column | Type | Notes |
@@ -129,9 +130,17 @@ each worker process every 5 s; read by `GET /internal/metrics`.
 `name` primary key → `last_request_at`. One row (`nominatim`); locked for the duration of each
 geocoding request to enforce 1 request/s across processes.
 
-### `llm_cache`
-Primary key `(content_hash, prompt_version, model)`: a new prompt version or model never reads
-a stale answer. Used from M4.
+### `llm_cache` (used from M4, ED-024)
+Primary key `(content_hash, prompt_version, model)`: `content_hash` is the SHA-256 of the
+(redacted) listing text, so a new prompt version or model never reads a stale answer. `response` is
+`{"flags": [{"flag", "quote"}]}` exactly as returned (quotes are verified when used). Only successful
+calls are cached.
+
+### `llm_calls` (M4, ED-024)
+One row per API call attempt: `called_at`, `model`, `prompt_version`, `outcome` (`started` → `ok` |
+`refused` | `truncated` | `invalid` | `error`), `input_tokens`, `output_tokens`, `latency_ms`,
+`error`. The daily cap counts rows since UTC midnight under a transaction-scoped advisory lock;
+`ix_llm_calls_called_at` makes that count an index range scan as the table grows.
 
 ## Indexes
 

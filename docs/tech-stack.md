@@ -27,11 +27,12 @@ Standard library also does real work: `hmac` + `hashlib` for contact hashes (ED-
 | pillow | ~=12.3.0 | Decode, validate and re-encode uploaded photos; bomb protection; also needed by imagehash in M5 (M1) |
 | phonenumbers | ~=9.0.41 | Port of Google's libphonenumber: parse and validate phone numbers, normalize to E.164 (M1) |
 | openpyxl | (script only, not an app dependency) | Reads CMHC's Excel data tables in `data/reference/cmhc/fetch_rms.py`; installed by hand when refreshing the dataset |
+| anthropic | ~=1.15.0 | Official Anthropic SDK for the text_red_flags API call (structured outputs, typed errors, timeouts). Brings its own HTTP stack (`httpx2`); our geocoder keeps using `httpx` (M4) |
 | httpx | ~=0.28.1 | HTTP client for the Nominatim geocoder (timeouts, injectable transport for tests) and the CMHC fetch script. Was already a dev dependency (TestClient); runtime since M3 |
 
 Dev: pytest (tests), ruff (lint + format), mypy (strict type checks), pre-commit (git hooks).
 
-External services (no library): OpenStreetMap Nominatim (geocoding, free, usage policy in ED-022;
+External services: Anthropic Messages API (text_red_flags, paid; daily cap, ED-024); OpenStreetMap Nominatim (geocoding, free, usage policy in ED-022;
 data under ODbL, attribution required). Reference data: CMHC Rental Market Survey via CMHC's
 Housing Market Information Portal (ED-021; licence in `data/reference/cmhc/README.md`).
 

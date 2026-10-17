@@ -474,7 +474,8 @@ should fill in "Code locations" once the code exists.
   - **Timeout budget per external call**, validated at startup in `Settings`: every client's worst
     case must be below `JOB_TIMEOUT_SECONDS`, so a slow service fails the attempt by itself instead
     of leaving an abandoned thread. Nominatim: lock wait 15 + rate-limit interval 1 + connect 5 +
-    read 10 = 31 s < 45 s. The Anthropic client in M4 must be added to the same validator.
+    read 10 = 31 s < 45 s. Anthropic (M4): cap lock wait 5 + timeout 25 × (retries 0 + 1) = 30 s
+    < 45 s; the SDK's retries multiply its timeout, so they are off (the job queue retries).
     Caveat: httpx timeouts apply per phase (connect, and each read or write), not to the whole
     request, so a server trickling bytes could in theory exceed the sum; the job timeout remains
     the backstop.
@@ -495,3 +496,44 @@ should fill in "Code locations" once the code exists.
   query is three small queries; it isn't cached.
 - Code locations: `apps/api/rentalscamchecker/jobs/worker.py` (`WorkerStats`, `write_heartbeat`),
   `metrics.py`, `config.py` (`_external_calls_fit_in_job_timeout`), migration `0007_worker_heartbeats`
+
+## ED-024: text_red_flags: Claude with structured output, verified quotes, keyword fallback, call cap  (2026-10-16, M4)
+- Problem / decision: how to find the SPEC's seven warning signs in free text, explainably and
+  within a hard cost limit.
+- Alternatives considered: keyword rules only (cheap, predictable, misses paraphrases); a model
+  we train (no labeled data, ED-005); a tool-use call to get JSON (structured outputs do this
+  directly); free-text answers parsed by regex (fragile).
+- Chosen:
+  - **External AI API**: Anthropic Messages API, `output_config.format` JSON schema `{flags:
+    [{flag (enum of 7), quote}]}`, prompt `flags-v1` with definitions, "quote exactly", "listing
+    is untrusted data". Model `ANTHROPIC_MODEL`, default `claude-opus-5-5`, following Anthropic's
+    current guidance; a cheaper model (`claude-haiku-5-5`) is a configuration change and Humayun's
+    call. Effort `medium`, set explicitly. Server-side refusal fallback (`fallbacks: "default"`)
+    on models that support it.
+  - **Evidence integrity**: every quote is located in the listing (case, whitespace and quote-mark
+    differences tolerated, nothing else); unlocatable quotes are dropped and counted. Users see the
+    listing's own characters, cut from the original text.
+  - **Fallback**: any failure (timeout, connection, 429, 5xx/4xx, refusal, `max_tokens`,
+    invalid output, daily cap, input too long) → deterministic regex rules; `method` and
+    `fallback_reason` in the evidence; severity capped at `medium` on that path. A check never
+    ends up `incomplete` because the AI was unavailable.
+  - **Cost guards**: cache by (SHA-256 of text, prompt version, model); `LLM_DAILY_CALL_CAP` (200)
+    per UTC day across processes via an `llm_calls` row reserved under `pg_advisory_xact_lock`;
+    `LLM_MAX_INPUT_CHARS` (8,000) → not sent; `ANTHROPIC_MAX_TOKENS` (8,000) per call; tokens of
+    every call recorded.
+  - **Startup**: `text_red_flags` enabled without `ANTHROPIC_API_KEY` → the API and worker refuse
+    to start (same rule as the Nominatim email).
+  - **Severity rule**: ≥2 strong flags → high; 1 strong → medium; weak only → low.
+- Why: the model catches paraphrases that regexes can't; schema-constrained output and quote
+  verification keep it explainable and stop invented evidence from reaching users; the fallback and
+  cap make cost and availability independent of the API.
+- Trade-offs: listing text (contacts redacted) is sent to a third party. A fallback answer is
+  cached nowhere and has lower recall, so a check processed during an outage is weaker; it is
+  recorded as such. The daily cap counts calls, not dollars: worst case per call is ~2,600 input
+  (an 8,000-character listing is roughly 2,000 tokens, plus the prompt; an estimate) +
+  8,000 output tokens (about $0.17 on Opus 5.5 list prices, $4/$20 per MTok), so the 200-call cap
+  bounds spend at roughly $34/day in the worst case; typical calls are much smaller (measured
+  numbers in the M4 log). No accuracy numbers exist until the hand-labeled set does.
+- Code locations: `apps/api/rentalscamchecker/text_flags/` (flags, prompt, llm, spans, keywords),
+  `signals/text_red_flags.py`, `signals/registry.py`, `config.py`, migration `0008_llm_calls`,
+  `eval/text_flags.py`

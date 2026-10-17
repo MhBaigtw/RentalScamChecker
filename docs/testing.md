@@ -36,12 +36,14 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M3): 226 total, all passing locally on 2026-10-16 (Windows); 76 of them are
+Current tests (M4): 300 total, all passing locally on 2026-10-16 (Windows); 101 of them are
 `integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
 but inherit the module's marker). **No test touches the network**: Nominatim is replaced by
 `tests/nominatim_fake.py` (an httpx `MockTransport` with hand-written `jsonv2`-shaped responses),
-and CMHC data by `tests/fixtures/rms_synthetic.csv`, whose values are synthetic and labelled so in
-every row. The full suite takes about 45 s, mostly real waits for leases,
+CMHC data by `tests/fixtures/rms_synthetic.csv`, whose values are synthetic and labelled so in
+every row, and the Anthropic API by `tests/anthropic_fake.py` (canned responses, the SDK's real
+exception types). The one test that reads the committed real CMHC dataset is a regression test
+(`test_typical_milton_two_bedroom_is_not_flagged`). The full suite takes about 45 s, mostly real waits for leases,
 backoffs and the worker process.
 
 | File | Kind | Covers |
@@ -59,6 +61,10 @@ backoffs and the worker process.
 | `test_address_sanity.py` (10) | unit (fake geocoder) | found + right city → none; not found → low; other city → medium; non-residential (school, shop, commercial, office) → medium; both → high; typed neighbourhood matches suburb; street-only match noted; attribution in evidence |
 | `test_m3_signals_pipeline.py` (7) | unit + 1 integration | API and worker refuse to start with address_sanity but no/blank/invalid `NOMINATIM_CONTACT_EMAIL`; price_vs_market alone needs none; **POST /checks → worker → both signals → GET shows complete with price evidence (reference rent, year, CMA, % below) and the address match** |
 | `test_metrics.py` (3) | unit + 1 integration | `/internal/metrics` needs the bearer token when set; 404 in production without one; reports jobs by status and a worker's heartbeat (alive, then stopped) |
+| `test_text_flags_unit.py` (38) | unit | quote location (case/whitespace/curly quotes tolerated; paraphrases and tiny quotes rejected); every keyword rule fires, ordinary listings (Interac e-Transfer, viewings offered, house rules) don't; severity rule; signal with a stub extractor: verified quotes, invented quote dropped and counted, duplicate flag once, **every API failure reason falls back to keyword rules, says so, capped at medium**; schema enumerates the 7 flags |
+| `test_text_flags_llm.py` (17) | integration | request uses structured output + explicit effort + server-side refusal fallback (plain endpoint for models without it); cache hit makes no call; cache is per model; **daily cap stops calls, and holds with 8 concurrent callers against a cap of 3**; long input not sent; timeout / connection / 429 / 500 / refusal / max_tokens / malformed output each map to a reason, logged in `llm_calls`, never cached |
+| `test_text_flags_pipeline.py` (8) | unit + integration | API refuses to start without `ANTHROPIC_API_KEY`; Anthropic worst case must fit the job timeout; **full journey on the AI path (redacted text sent, no phone number)**; **full journey with a simulated API failure (timeout, 503) → keyword fallback, check completes** |
+| `test_eval_text_flags.py` (6) | unit | eval harness: per-flag counts, precision/recall, n/a when never predicted, report states set size and the synthetic warning, unknown labels rejected |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
@@ -77,6 +83,7 @@ it failed each time, then passed again once the code was restored:
 - (pre-M3) upsert without the "only replace an error" condition: `test_error_never_replaces_a_result` fails.
 - (pre-M3) no "check complete → write nothing" guard: `test_check_timeout_finalizes_without_the_missing_signal` fails.
 - (M3) geocoder rate-limit sleep removed: `test_requests_are_spaced_by_the_minimum_interval_across_instances` fails.
+- (M4) daily-cap advisory lock removed: `test_daily_cap_holds_under_concurrency` fails (3 of 3 runs).
 - (M3) worker waits for the helper thread instead of timing out (`helper.join()`): `test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running` fails.
 
 The raw-contact test was checked to be able to fail: a throwaway copy with the phone number
