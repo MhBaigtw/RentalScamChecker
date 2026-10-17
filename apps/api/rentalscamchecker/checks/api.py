@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from rentalscamchecker.checks.service import create_check, load_check
@@ -18,8 +19,9 @@ from rentalscamchecker.config import Settings
 from rentalscamchecker.errors import ApiError, FieldError, validation_error
 from rentalscamchecker.graph import cluster_size, public_ref, related_checks
 from rentalscamchecker.images import MAX_PHOTO_BYTES, PhotoRejected, ProcessedPhoto, process_photo
-from rentalscamchecker.models import Check
-from rentalscamchecker.pipeline import enqueue_check_jobs
+from rentalscamchecker.models import Check, Job
+from rentalscamchecker.pipeline import aggregate_job_key, enqueue_check_jobs
+from rentalscamchecker.scoring import wording
 from rentalscamchecker.signals.registry import enabled_signals
 from rentalscamchecker.storage import PhotoStorage
 
@@ -94,16 +96,32 @@ class RelatedOut(BaseModel):
     cluster_size_capped: bool
 
 
+class RiskOut(BaseModel):
+    """The overall level (scoring/, ED-027). Names only: points and weights stay internal."""
+
+    level: str  # low | some | high | incomplete
+    label: str  # "Low risk", "Some risk signals", "High risk signals", "Incomplete"
+    summary: str
+    # Signals that raised the level, strongest first.
+    contributing: list[str]
+    # Signals (other than optional ones) that errored or never finished.
+    missing: list[str]
+
+
 class CheckOut(BaseModel):
     id: uuid.UUID
     status: str
     created_at: datetime
     risk_level: str | None
     scoring_version: str | None
+    # The signals this check runs, for progress display (from its aggregate job).
+    expected_signals: list[str]
     listing: ListingOut
     photos: list[PhotoOut]
     contacts: list[ContactOut]
     signals: list[SignalOut]
+    # None until the check is complete and scored.
+    risk: RiskOut | None
     # None until the check is complete (photo links are stored while its signals run).
     related: RelatedOut | None
 
@@ -170,7 +188,7 @@ def build_router(
             if check is None:
                 raise ApiError(404, "not_found", "No check with this id.")
             related = _related(session, check) if check.status == "complete" else None
-            return _to_out(check, related)
+            return _to_out(check, _expected_signals(session, check.id), related)
 
     return router
 
@@ -231,13 +249,39 @@ def _related(session: Session, check: Check) -> RelatedOut:
     )
 
 
-def _to_out(check: Check, related: RelatedOut | None) -> CheckOut:
+def _expected_signals(session: Session, check_id: uuid.UUID) -> list[str]:
+    payload = session.scalar(
+        select(Job.payload).where(Job.idempotency_key == aggregate_job_key(check_id))
+    )
+    return [name for name, _version in payload["signals"]] if payload else []
+
+
+def _risk(check: Check) -> RiskOut | None:
+    if check.status != "complete" or check.risk_level is None:
+        return None
+    details = check.risk_details or {}
+    from_other_listings = any(
+        s.evidence.get("depends_on_other_checks") is True and s.severity not in (None, "none")
+        for s in check.signal_results
+    )
+    return RiskOut(
+        level=check.risk_level,
+        label=wording.LABELS[check.risk_level],
+        summary=wording.summary(check.risk_level, from_other_listings),
+        contributing=list(details.get("contributing", [])),
+        missing=list(details.get("missing", [])),
+    )
+
+
+def _to_out(check: Check, expected: list[str], related: RelatedOut | None) -> CheckOut:
     return CheckOut(
         id=check.id,
         status=check.status,
         created_at=check.created_at,
         risk_level=check.risk_level,
         scoring_version=check.scoring_version,
+        expected_signals=expected,
+        risk=_risk(check),
         listing=ListingOut(
             submitted_url=check.submitted_url,
             listing_text=check.listing_text,

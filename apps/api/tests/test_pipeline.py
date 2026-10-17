@@ -125,7 +125,8 @@ def test_aggregator_starts_as_soon_as_all_signals_are_done(
     assert worker.run_once() is True  # aggregator, an hour before its timeout
     assert worker.run_once() is False
 
-    assert check_row(session_factory, check_id) == ("complete", None)
+    # Two "low" results score "some" under scoring v1 (ED-027).
+    assert check_row(session_factory, check_id) == ("complete", "some")
     assert results(session_factory, check_id) == {
         "a": ("ok", "low", None),
         "b": ("ok", "low", None),
@@ -206,7 +207,7 @@ def test_check_with_no_enabled_signals_completes_immediately(
 
     drain(worker)
 
-    assert check_row(session_factory, check_id) == ("complete", None)
+    assert check_row(session_factory, check_id) == ("complete", "low")
     assert job_status(session_factory, aggregate_job_key(check_id)) == "done"
 
 
@@ -255,7 +256,10 @@ def test_check_created_via_api_reaches_complete_through_the_worker(
 
     body = client.get(f"/checks/{check_id}").json()
     assert body["status"] == "complete"
-    assert body["risk_level"] is None  # scoring arrives in M7
+    assert body["risk_level"] == "low"  # the stub always returns severity "none"
+    assert body["scoring_version"] == "v1"
+    assert body["expected_signals"] == ["stub"]
+    assert body["risk"]["label"] == "Low risk"
     assert [(s["name"], s["status"], s["severity"]) for s in body["signals"]] == [
         ("stub", "ok", "none")
     ]
@@ -341,4 +345,4 @@ def test_signal_timing_out_then_finishing_late_leaves_one_result(
 
     assert (signal.started, signal.runs) == (2, 2)  # both attempts ran to the end
     assert result_rows(session_factory, check_id) == [("slow", "ok", None)]
-    assert check_row(session_factory, check_id) == ("complete", None)
+    assert check_row(session_factory, check_id) == ("complete", "some")  # one "low" result

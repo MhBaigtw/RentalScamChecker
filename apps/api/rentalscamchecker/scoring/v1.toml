@@ -1,0 +1,40 @@
+# Scoring config v1 (M7, ED-027). DETERMINISTIC rules, not a trained model. Every check stores the
+# version it was scored with (checks.scoring_version). To change a value, copy this file to
+# v2.toml and bump SCORING_VERSION; never edit a version that has been used.
+#
+# These numbers are a starting point chosen by hand, not tuned on labelled outcomes (there are
+# none yet). They are never shown to users (SPEC 10: don't expose weights or thresholds).
+
+version = "v1"
+
+# Points for one signal at each severity.
+[severity_points]
+none = 0
+low = 1
+medium = 2
+high = 4
+
+# A check's points: the sum over its signals of severity points x weight.
+# Level: "high" at >= levels.high points, "some" at >= levels.some, otherwise "low".
+[levels]
+some = 1
+high = 4
+
+# Per-signal weights (default 1.0). address_sanity is halved: typos and new buildings make
+# geocoding misses common, so even its "high" reaches only "some risk signals" on its own.
+[weights]
+address_sanity = 0.5
+
+[graph]
+# Results that depend on OTHER checks' risk (evidence.depends_on_other_checks: contact_reuse
+# always; photo_reuse_internal when only a same-address match to a high-risk check made it
+# concerning) can raise a check at most this many levels above the level from its own evidence.
+# 1: alone they reach "some" at most; on top of own "some" evidence they can reach "high".
+max_steps_up = 1
+
+[incomplete]
+# If any other signal errored (or never finished) and the level is not already "high", the check
+# is "incomplete": the missing evidence might have changed it. Listing the exceptions rather than
+# the key signals means a new signal counts by default. photo_reuse_web is a paid, optional extra
+# that is off by default.
+optional_signals = ["photo_reuse_web"]

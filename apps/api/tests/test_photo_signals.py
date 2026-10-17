@@ -193,7 +193,59 @@ def test_same_address_repost_is_information_not_a_warning(
 
     assert result.severity == "none"
     assert result.evidence["same_address_matches"] == 1
+    assert result.evidence["depends_on_other_checks"] is False
     assert result.explanation is not None and "same address" in result.explanation
+
+
+def test_same_address_match_to_an_independently_high_check_depends_on_other_checks(
+    session_factory: sessionmaker[Session], storage: LocalDiskStorage, embedder: ClipEmbedder
+) -> None:
+    """v3 (M7, ED-027): the earlier check at this address is high risk on its own evidence, so the
+    match is concerning, but only because of another check's risk: marked
+    depends_on_other_checks, which the scorer caps and leaves out of the independent level."""
+    signal = PhotoReuseInternalSignal(session_factory, storage, embedder)
+    earlier = add_check(session_factory, storage, [fixture("01")])
+    signal.run(earlier, CTX)
+    with session_factory.begin() as s:
+        s.execute(
+            sa.update(Check)
+            .where(Check.id == earlier.check_id)
+            .values(risk_level="high", independent_risk_level="high")
+        )
+    again = add_check(
+        session_factory, storage, [fixture("01")], address="1430 Trafalgar Road, Unit 2"
+    )
+
+    result = signal.run(again, CTX)
+
+    assert result.severity == "high"
+    assert result.evidence["depends_on_other_checks"] is True
+    assert result.evidence["other_checks_at_different_address"] == 0
+    assert result.explanation is not None
+    assert "same address" in result.explanation
+    assert "different address" not in result.explanation
+
+
+def test_only_the_independent_level_of_an_earlier_check_counts(
+    session_factory: sessionmaker[Session], storage: LocalDiskStorage, embedder: ClipEmbedder
+) -> None:
+    """An earlier check that is "high" only through graph links (independent "some") doesn't
+    make a same-address repost concerning: no second hop."""
+    signal = PhotoReuseInternalSignal(session_factory, storage, embedder)
+    earlier = add_check(session_factory, storage, [fixture("01")])
+    signal.run(earlier, CTX)
+    with session_factory.begin() as s:
+        s.execute(
+            sa.update(Check)
+            .where(Check.id == earlier.check_id)
+            .values(risk_level="high", independent_risk_level="some")
+        )
+    again = add_check(session_factory, storage, [fixture("01")], address="1430 Trafalgar Rd")
+
+    result = signal.run(again, CTX)
+
+    assert result.severity == "none"
+    assert result.evidence["depends_on_other_checks"] is False
 
 
 def test_similar_but_different_rooms_do_not_match(

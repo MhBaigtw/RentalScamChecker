@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
     api_port: int = 8100
+    # Browser origins allowed to call the API (CORS, comma-separated). The web app calls the API
+    # directly from the browser (ED-028). Never "*".
+    web_origins: str = "http://127.0.0.1:3100,http://localhost:3100"
     # Secret key for HMAC-SHA256 of phone numbers and emails (ED-004). Changing it breaks
     # matching against every contact hash stored before the change.
     contact_hash_pepper: SecretStr = Field(min_length=32)

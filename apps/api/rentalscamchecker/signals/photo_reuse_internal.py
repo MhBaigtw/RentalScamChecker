@@ -7,14 +7,16 @@ on CPU) (SPEC 4, ED-025). For each photo of the check:
 2. find photos of OTHER checks that match under photos/matching.py: a Postgres bit_count scan for
    the hashes, the pgvector HNSW index for the embedding;
 3. store every match in photo_links (both directions) for the check graph (graph.py, ED-026);
-4. keep matches whose check is for a different street address or city, or was rated high risk.
-   Matches at the same address are reported as information (a landlord re-posting their own
-   listing is normal), not as a warning.
+4. keep matches whose check is for a different street address or city. Matches at the same
+   address are information (a landlord re-posting their own listing is normal), unless that
+   earlier check is high risk from its own evidence (`independent_risk_level`, ED-027).
 
 Other checks appear in the evidence by `public_ref` only, never by id (graph.py explains why).
 
-Severity: a hash match at another address -> high; an embedding-only match (less certain) ->
-medium; otherwise none.
+Severity: a hash match -> high; an embedding-only match (less certain) -> medium; otherwise
+none. When only same-address matches to high-risk checks made it concerning, the result is
+marked `depends_on_other_checks`: the scorer then lets it raise the level by one step at most and
+leaves it out of this check's independent level, so risk can't hop on from here (ED-027).
 """
 
 import io
@@ -44,7 +46,8 @@ EMBEDDING_CANDIDATES = 20
 
 _HASH_SQL = text(
     """
-    SELECT p.id AS photo_id, p.check_id, c.city, c.address_text, c.risk_level, c.created_at,
+    SELECT p.id AS photo_id, p.check_id, c.city, c.address_text, c.independent_risk_level,
+           c.created_at,
            bit_count((p.phash # :phash)::bit(64)) AS phash_distance,
            bit_count((p.dhash # :dhash)::bit(64)) AS dhash_distance
     FROM check_photos p JOIN checks c ON c.id = p.check_id
@@ -57,8 +60,9 @@ _HASH_SQL = text(
 )
 _EMBEDDING_SQL = text(
     """
-    SELECT p.id AS photo_id, p.check_id, c.city, c.address_text, c.risk_level, c.created_at,
-           p.phash, p.dhash, 1 - (p.embedding <=> CAST(:embedding AS vector)) AS cosine
+    SELECT p.id AS photo_id, p.check_id, c.city, c.address_text, c.independent_risk_level,
+           c.created_at, p.phash, p.dhash,
+           1 - (p.embedding <=> CAST(:embedding AS vector)) AS cosine
     FROM check_photos p JOIN checks c ON c.id = p.check_id
     WHERE p.check_id <> :check_id AND p.embedding IS NOT NULL
     ORDER BY p.embedding <=> CAST(:embedding AS vector)
@@ -85,7 +89,8 @@ class Match:
 class PhotoReuseInternalSignal:
     name = "photo_reuse_internal"
     # 2 (M6): matches are stored in photo_links; evidence shows public_ref instead of check ids.
-    version = "2"
+    # 3 (M7): reads independent_risk_level; same-address-only concern depends on other checks.
+    version = "3"
 
     def __init__(
         self,
@@ -200,12 +205,18 @@ def _match(
         other_same_address=same_address(
             check.address_text, check.city, row["address_text"], row["city"]
         ),
-        other_high_risk=row["risk_level"] == "high",
+        other_high_risk=row["independent_risk_level"] == "high",
         kind=kind,
         phash_distance=phash_distance,
         dhash_distance=dhash_distance,
         cosine=round(cosine, 4) if cosine is not None else None,
     )
+
+
+def _numbers(photos: list[int]) -> str:
+    if len(photos) <= 2:
+        return " and ".join(map(str, photos))
+    return ", ".join(map(str, photos[:-1])) + f" and {photos[-1]}"
 
 
 def _link(check: CheckInput, m: Match) -> NewPhotoLink:
@@ -224,19 +235,24 @@ def _link(check: CheckInput, m: Match) -> NewPhotoLink:
 def _result(
     signal: PhotoReuseInternalSignal, photo_count: int, matches: list[Match]
 ) -> SignalResult:
-    concerning = [m for m in matches if not m.other_same_address or m.other_high_risk]
+    elsewhere = [m for m in matches if not m.other_same_address]
+    risky_same = [m for m in matches if m.other_same_address and m.other_high_risk]
     same_place = [m for m in matches if m.other_same_address and not m.other_high_risk]
+    # Matches at other addresses are this listing's own evidence; same-address matches only count
+    # because of another check's risk.
+    concerning = elsewhere or risky_same
     severity: Severity = "none"
     if any(m.kind == "hash" for m in concerning):
         severity = "high"
     elif concerning:
         severity = "medium"
     by_check: dict[uuid.UUID, set[int]] = defaultdict(set)
-    for m in concerning:
+    for m in elsewhere:
         by_check[m.other_check_id].add(m.position)
-    cities = sorted({m.other_city for m in concerning})
+    cities = sorted({m.other_city for m in elsewhere})
     evidence: dict[str, object] = {
         "method": "perceptual_hash+clip_embedding",
+        "depends_on_other_checks": not elsewhere and bool(risky_same),
         "photos_checked": photo_count,
         "matches": [
             {
@@ -254,17 +270,25 @@ def _result(
         ],
         "other_checks_at_different_address": len(by_check),
         "other_cities": cities,
-        "same_address_matches": len(same_place),
+        "same_address_matches": len(same_place) + len(risky_same),
     }
-    if concerning:
+    if not elsewhere and risky_same:
+        photos = sorted({m.position + 1 for m in risky_same})
+        explanation = (
+            "We compared the photos with all photos submitted to this service before. "
+            f"Photo{'s' if len(photos) > 1 else ''} {_numbers(photos)} match photos from an "
+            "earlier check for this same address that had high risk signals from its own "
+            "evidence. This may be the same listing posted again."
+        )
+        next_step = (
+            "Read the other results in this report carefully. Visit in person, and confirm the "
+            "person owns or manages the unit before paying anything."
+        )
+    elif concerning:
         photos = sorted({m.position + 1 for m in concerning})
         where = ", ".join(cities)
         plural = len(photos) > 1
-        numbers = (
-            " and ".join(map(str, photos))
-            if len(photos) <= 2
-            else (", ".join(map(str, photos[:-1])) + f" and {photos[-1]}")
-        )
+        numbers = _numbers(photos)
         if severity == "high":
             strength = (
                 "match earlier photos almost exactly"
