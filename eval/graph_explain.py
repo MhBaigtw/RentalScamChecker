@@ -462,9 +462,7 @@ def main() -> None:
                 f"### {title}, without `{index}` (median {no_index:.2f} ms)\n\n```\n{plan}\n```\n",
                 file=out,
             )
-    REPORT.write_text(out.getvalue().rstrip("
-") + "
-", encoding="utf-8")
+    REPORT.write_text(out.getvalue().rstrip("\n") + "\n", encoding="utf-8")
     print(out.getvalue())
 
 
