@@ -571,3 +571,74 @@ should fill in "Code locations" once the code exists.
 - Code locations: `apps/api/rentalscamchecker/text_flags/` (flags, prompt, llm, spans, keywords),
   `signals/text_red_flags.py`, `signals/registry.py`, `config.py`, migration `0008_llm_calls`,
   `eval/text_flags.py`
+
+## ED-025: Photo reuse: perceptual hashes + CLIP ViT-B/32 (int8 ONNX on CPU), calibrated on CC0 fixtures  (2026-10-17, M5)
+- Problem / decision: detect a listing's photos being reused from an earlier check at another
+  address, robust to the edits re-posters make, on a CPU-only machine; choose the embedding model,
+  the runtime, the thresholds and the search method; and keep the paid web search off.
+- **Runtime and model** (Humayun asked for a CPU-friendly option over a full PyTorch install if
+  quality is comparable):
+  - Chosen: OpenAI's CLIP ViT-B/32 image encoder (MIT licence) as ONNX, run with `onnxruntime`;
+    preprocessing reimplemented with Pillow + numpy (no `transformers`). A **pretrained model we
+    run**; we didn't train it.
+  - Measured install, before installing: new Python packages 69 MB download / ~204 MB unpacked
+    (onnxruntime 14.9 MB, scipy 36.7 MB, numpy 12.6 MB, PyWavelets, ImageHash, pgvector, protobuf,
+    flatbuffers). The PyTorch route needs a 124 MB `torch` wheel on its own (installed size not
+    measured). ONNX runs the same weights, so quality is the same model's by construction; the
+    open question was fp32 vs int8.
+  - fp32 (Qdrant export, MIT-tagged, 352 MB) vs int8 (Xenova export, 89 MB; no licence tag of its
+    own, derived from the same MIT weights), on this machine (AMD, 12 logical CPUs, Windows 11):
+    per-image median 86-95 ms fp32 vs 100-103 ms int8 (two runs; int8 is not faster on this CPU);
+    model load 1.8-2.7 s fp32 vs 0.6-1.0 s int8; recall at the precision-1.0 cosine threshold
+    identical (0.545 at 0.94 for both); hardest non-duplicate 0.921 (fp32) vs 0.928 (int8).
+    **Chosen: int8** (`PHOTO_EMBEDDING_MODEL=clip-vit-b32-int8`): same quality on the fixtures,
+    a quarter of the download and disk, faster start. Files pinned to a repository revision and
+    verified by SHA-256 (`photos/model_files.py`), stored in `var/models/` (gitignored).
+- **Hashes**: pHash and dHash (`imagehash`, 64 bits each), stored as signed BIGINT.
+- **Thresholds**, calibrated with `eval/photo_dupes.py` on 24 CC0/public-domain Wikimedia Commons
+  interiors (manifest with source and licence per image, 4.35 MB, committed) × 12 edits = 288
+  duplicate pairs, 6,900 non-duplicate pairs including 525 hard negatives (similar-looking but
+  different rooms). Report with all curve points: `eval/reports/photo_dupes.md`. Key points:
+  - pHash alone reaches precision 1.0 up to t = 18 (recall 0.646), first false positive at 20;
+    dHash alone up to t = 14 (recall 0.590).
+  - CLIP alone: precision 1.0 from cosine 0.94 (recall 0.545); the most similar different room
+    scored 0.928.
+  - Combined rule (chosen): **single hash ≤ 10, OR both hashes ≤ 18, OR cosine ≥ 0.95** →
+    recall 0.774 (223/288), 0 false positives, 0 hard-negative hits. Neighbouring points:
+    both-hashes ≤ 20 → 0.799 with 0 FP; ≤ 22 → first 2 FP; cosine ≥ 0.93 → 0.833 with 0 FP but
+    only 0.002 above the hardest negative.
+  - Why not the higher-recall points: a query photo is compared with every stored photo, so the
+    per-pair false-match rate must stay tiny as the database grows. For random 64-bit hashes
+    P(d ≤ 18) ≈ 3×10⁻⁴ (about 2 false hits per query at 10,000 photos) but P(d ≤ 10) ≈ 10⁻⁸;
+    requiring BOTH hashes for the looser 18-bit allowance and keeping 0.02 cosine margin above the
+    hardest negative trades fixture recall for safety at scale.
+  - Recall by edit at the chosen point: resize, recompression, colour, greyscale, mirror (via the
+    embedding), watermark 1.00; rotation 0.92; screenshot border 0.83; crop+resize+recompress 0.75;
+    centre crop 80% 0.58; corner crop 70% 0.17; tight crop 55% 0.04. **Known gap: crops removing
+    ≥30% of the picture.** Their hashes change completely and their embeddings fall into the range
+    of different-but-similar rooms. Options if this matters in practice: store embeddings of
+    several crops per photo, or add local-feature matching (e.g. ORB + RANSAC) as a second stage.
+- **Hash search**: Postgres scan with `bit_count((phash # :q)::bit(64))`, no index. Measured
+  (`eval/reports/hash_search_bench.md`): 7 ms at 10k photos, 47 ms at 100k, vs an in-process
+  BK-tree at 21-24 ms and 224-257 ms (it visits ~100% of nodes at radius 18, so its pruning doesn't
+  help, and every worker process would have to rebuild it). Revisit beyond ~1M photos.
+- **Embedding search**: pgvector HNSW index (`vector_cosine_ops`), top 20 neighbours per photo,
+  then the threshold.
+- **Signal rules** (`photo_reuse_internal`): matches at the same street address (normalised:
+  abbreviations, units) are information, not a warning; other addresses or a previously
+  high-risk check → `high` for a hash match, `medium` for an embedding-only match. Fingerprints
+  are computed once and stored on `check_photos`.
+- **photo_reuse_web (TinEye)**: behind `TINEYE_ENABLED=false`; cache by image SHA-256; daily cap
+  (`TINEYE_DAILY_SEARCH_CAP`, reserved under an advisory lock); at most 2 photos per check; budget
+  2 × 15 s + 5 s < 45 s job timeout. **The adapter has never called TinEye**: no account exists,
+  per Humayun. The response shape follows TinEye's published client libraries; the request
+  convention (`POST {api}/search/`, field `image_upload`, header `x-api-key`) could not be checked
+  against TinEye's reference (tineye.com didn't resolve from the dev machine). Verify before
+  enabling. Tests use fakes and a mock transport only.
+- Trade-offs: CPU embedding adds ~0.1 s per photo (cold start ~4.7 s for the first check in a
+  worker process, measured); the model adds 89 MB to every worker deployment; crops are the known
+  weakness above; same-address detection is a string heuristic, not geocoding.
+- Code locations: `apps/api/rentalscamchecker/photos/` (hashing, embeddings, matching,
+  model_files, web_search), `signals/photo_reuse_internal.py`, `signals/photo_reuse_web.py`,
+  `addresses.py`, migration `0009_photo_signals`, `eval/photo_dupes.py`,
+  `eval/hash_search_bench.py`, `eval/fixtures/photos/`

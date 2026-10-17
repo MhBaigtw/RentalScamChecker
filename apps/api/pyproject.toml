@@ -21,6 +21,10 @@ dependencies = [
     "phonenumbers~=9.0.41",
     "httpx~=0.28.1",
     "anthropic~=1.15.0",
+    "numpy~=2.5.4",
+    "onnxruntime~=1.31.0",
+    "imagehash~=4.3.2",
+    "pgvector~=0.5.1",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +56,11 @@ select = ["E", "F", "I", "B", "UP", "S"]
 python_version = "3.12"
 strict = true
 packages = ["rentalscamchecker"]
+
+[[tool.mypy.overrides]]
+# onnxruntime ships no type information.
+module = ["onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

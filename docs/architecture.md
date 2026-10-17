@@ -41,6 +41,10 @@ browser ──HTTP──> apps/web (Next.js, :3100) ──server-side fetch─�
 | `reference_rents.py` | CMHC CSV loader (CLI) and `find_reference()` (municipality → CMA fallback) (M3). |
 | `text_flags/` | text_red_flags internals: flag definitions and severity rule, prompt + schema, `ClaudeFlagExtractor` (Anthropic API, cache, daily cap), quote verification, keyword fallback (M4, ED-024). |
 | `signals/text_red_flags.py` | Runs the extractor, verifies quotes, falls back to keyword rules (M4). |
+| `photos/` | Photo signals: `hashing.py` (pHash/dHash), `embeddings.py` (CLIP ONNX), `matching.py` (thresholds), `model_files.py` (download + checksums), `web_search.py` (TinEye adapter, cache, cap) (M5, ED-025). |
+| `signals/photo_reuse_internal.py` | Fingerprints a check's photos and matches them against earlier checks (M5). |
+| `signals/photo_reuse_web.py` | Paid reverse image search behind `TINEYE_ENABLED` (OFF) (M5). |
+| `addresses.py` | Street-address normalisation for "same address" (M5). |
 | `metrics.py` | `GET /internal/metrics`: jobs by status, worker heartbeats (M3, ED-023). |
 | `geocoding.py` | `NominatimGeocoder`: identified User-Agent, DB cache, global 1 req/s limit via a locked `rate_limits` row (M3). External API (OpenStreetMap data). |
 

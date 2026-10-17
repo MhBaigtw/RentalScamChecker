@@ -45,6 +45,7 @@ cd apps\api
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[dev]"
 .venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m rentalscamchecker.photos.model_files   # CLIP image model, 89 MB, into var\models
 # CMHC reference rents for price_vs_market (licence: data/reference/cmhc/README.md)
 .venv\Scripts\python.exe -m rentalscamchecker.reference_rents ..\..\data\reference\cmhc\rms_average_rent_2025_10.csv
 .venv\Scripts\python.exe -m pytest                 # creates/uses the separate *_test database

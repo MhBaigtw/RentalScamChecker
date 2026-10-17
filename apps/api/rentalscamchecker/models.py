@@ -1,7 +1,6 @@
 """SQLAlchemy ORM models for the SPEC.md section 8 data model.
 
-Not here yet: `users`, `outcomes` and `disputes` (M8), and `check_photos.embedding` (M5, once
-the embedding model and therefore the vector dimension are chosen). See docs/database-design.md.
+Not here yet: `users`, `outcomes` and `disputes` (M8). See docs/database-design.md.
 
 Enumerated values are TEXT columns with CHECK constraints rather than Postgres ENUM types:
 adding a value later is one constraint swap instead of an ALTER TYPE (ED-012).
@@ -14,6 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
@@ -108,10 +108,21 @@ class Check(Base):
     signal_results: Mapped[list["SignalResult"]] = relationship(back_populates="check")
 
 
+# CLIP ViT-B/32 image embeddings (photos/embeddings.py, ED-025).
+EMBEDDING_DIMENSIONS = 512
+
+
 class CheckPhoto(Base):
     __tablename__ = "check_photos"
     __table_args__ = (
         UniqueConstraint("check_id", "position", name="uq_check_photos_check_id_position"),
+        # Approximate nearest-neighbour search by cosine distance (pgvector HNSW).
+        Index(
+            "ix_check_photos_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -119,9 +130,12 @@ class CheckPhoto(Base):
     # Order the user uploaded them in, 0-based.
     position: Mapped[int] = mapped_column(SmallInteger)
     storage_key: Mapped[str] = mapped_column(Text, unique=True)
-    # 64-bit perceptual hashes, filled in M5. Stored as signed BIGINT (Postgres has no unsigned).
+    # 64-bit perceptual hashes (photos/hashing.py), as signed BIGINT (Postgres has no unsigned).
+    # NULL until photo_reuse_internal has processed the photo.
     phash: Mapped[int | None] = mapped_column(BigInteger)
     dhash: Mapped[int | None] = mapped_column(BigInteger)
+    # L2-normalised CLIP embedding; NULL until processed.
+    embedding: Mapped[Any | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
     width: Mapped[int] = mapped_column(Integer)
     height: Mapped[int] = mapped_column(Integer)
 
@@ -330,6 +344,36 @@ class LlmCall(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
+
+
+class WebImageSearch(Base):
+    """One row per paid reverse-image-search call (photo_reuse_web, M5): the daily cap counts these
+    rows. Reserved (outcome 'started') before the request, like llm_calls."""
+
+    __tablename__ = "web_image_searches"
+    __table_args__ = (
+        CheckConstraint(_in("outcome", ("started", "ok", "error")), name="outcome"),
+        Index("ix_web_image_searches_called_at", "called_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    called_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    provider: Mapped[str] = mapped_column(Text)
+    image_sha256: Mapped[bytes] = mapped_column(LargeBinary)
+    outcome: Mapped[str] = mapped_column(Text, server_default="started")
+    result_count: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class WebImageSearchCache(Base):
+    """Normalised reverse-image-search results by image hash and provider (photo_reuse_web)."""
+
+    __tablename__ = "web_image_search_cache"
+
+    image_sha256: Mapped[bytes] = mapped_column(LargeBinary, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    matches: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class LlmCache(Base):

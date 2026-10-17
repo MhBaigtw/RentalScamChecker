@@ -46,6 +46,12 @@ start of M1; the container and its data were intact afterwards).
   refuse to start without it. The public Nominatim service allows at most 1 request/s for our
   whole deployment, which the `rate_limits` row enforces across worker processes (ED-022).
 - `/internal/metrics`: set `INTERNAL_METRICS_TOKEN` in any shared environment (ED-023).
+- The CLIP model file is required while `photo_reuse_internal` is enabled (M5): run
+  `python -m rentalscamchecker.photos.model_files` (89 MB, SHA-256 checked) into `PHOTO_MODEL_DIR`
+  (default `var/models`); the API and worker refuse to start without it. Workers also need the CPU
+  for it (~0.1 s per photo).
+- `TINEYE_ENABLED` stays false until Humayun approves the spend and the adapter has been verified
+  against the live API (ED-025).
 - `ANTHROPIC_API_KEY` is required while `text_red_flags` is enabled (M4). Calls are paid: keep
   `LLM_DAILY_CALL_CAP` low (default 200) until spend is approved, and watch `llm_calls` for token use.
 
