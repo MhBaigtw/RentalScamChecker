@@ -13,11 +13,17 @@ from sqlalchemy.orm import Session, sessionmaker
 from rentalscamchecker.config import Settings
 from rentalscamchecker.contacts import InvalidContact, normalize_email
 from rentalscamchecker.geocoding import NominatimGeocoder
+from rentalscamchecker.photos.embeddings import ClipEmbedder
+from rentalscamchecker.photos.model_files import MODELS, model_path
+from rentalscamchecker.photos.web_search import CachedCappedSearch, TinEyeClient
 from rentalscamchecker.signals.address_sanity import AddressSanitySignal
 from rentalscamchecker.signals.base import Signal
+from rentalscamchecker.signals.photo_reuse_internal import PhotoReuseInternalSignal
+from rentalscamchecker.signals.photo_reuse_web import PhotoReuseWebSignal
 from rentalscamchecker.signals.price_vs_market import PriceVsMarketSignal
 from rentalscamchecker.signals.stub import StubSignal
 from rentalscamchecker.signals.text_red_flags import TextRedFlagsSignal
+from rentalscamchecker.storage import LocalDiskStorage
 from rentalscamchecker.text_flags.llm import ClaudeFlagExtractor
 
 SignalFactory = Callable[[Settings, sessionmaker[Session]], Signal]
@@ -85,12 +91,47 @@ def _text_red_flags(settings: Settings, sessions: sessionmaker[Session]) -> Sign
     return TextRedFlagsSignal(extractor)
 
 
+def _photo_reuse_internal(settings: Settings, sessions: sessionmaker[Session]) -> Signal:
+    if settings.photo_embedding_model not in MODELS:
+        raise ValueError(
+            f"PHOTO_EMBEDDING_MODEL {settings.photo_embedding_model!r} is unknown; "
+            f"known: {', '.join(MODELS)}"
+        )
+    path = model_path(settings.photo_embedding_model, settings.photo_model_path)
+    if not path.exists():
+        raise ValueError(
+            f"photo_reuse_internal is enabled but the embedding model is missing at {path}. "
+            "From apps/api run: .venv/Scripts/python.exe -m rentalscamchecker.photos.model_files"
+        )
+    storage = LocalDiskStorage(settings.photo_storage_path)
+    return PhotoReuseInternalSignal(sessions, storage, ClipEmbedder(path))
+
+
+def _photo_reuse_web(settings: Settings, sessions: sessionmaker[Session]) -> Signal:
+    storage = LocalDiskStorage(settings.photo_storage_path)
+    if not settings.tineye_enabled:
+        return PhotoReuseWebSignal(sessions, storage, None, settings.tineye_max_photos_per_check)
+    key = settings.tineye_api_key.get_secret_value().strip() if settings.tineye_api_key else ""
+    if not key:
+        raise ValueError("TINEYE_ENABLED is true but TINEYE_API_KEY is not set")
+    client = TinEyeClient(key, settings.tineye_api_url, settings.tineye_timeout_seconds)
+    search = CachedCappedSearch(
+        sessions,
+        client,
+        daily_cap=settings.tineye_daily_search_cap,
+        cap_lock_wait_seconds=settings.tineye_cap_lock_wait_seconds,
+    )
+    return PhotoReuseWebSignal(sessions, storage, search, settings.tineye_max_photos_per_check)
+
+
 # name -> factory. Each real signal is added here in its milestone.
 AVAILABLE: dict[str, SignalFactory] = {
     "stub": _stub,
     "price_vs_market": _price_vs_market,
     "address_sanity": _address_sanity,
     "text_red_flags": _text_red_flags,
+    "photo_reuse_internal": _photo_reuse_internal,
+    "photo_reuse_web": _photo_reuse_web,
 }
 
 

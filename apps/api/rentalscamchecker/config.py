@@ -34,7 +34,9 @@ class Settings(BaseSettings):
 
     # --- Signals and orchestration (M2) ---
     # Comma-separated signal names to run for every new check (see signals/registry.py).
-    enabled_signals: str = "price_vs_market,address_sanity,text_red_flags"
+    enabled_signals: str = (
+        "price_vs_market,address_sanity,text_red_flags,photo_reuse_internal,photo_reuse_web"
+    )
     stub_signal_sleep_seconds: float = 1.0
     # The aggregator runs when every signal has a result, or after this long, whichever is first.
     check_timeout_seconds: float = 120.0
@@ -78,6 +80,31 @@ class Settings(BaseSettings):
     llm_max_input_chars: int = Field(default=8000, ge=100)
     # Longest wait to reserve a call under the daily cap (a Postgres lock).
     llm_cap_lock_wait_seconds: float = Field(default=5.0, gt=0)
+
+    # --- Photo signals (M5, ED-025) ---
+    # Pretrained CLIP ViT-B/32 image encoder in ONNX (see photos/model_files.py for the choices).
+    photo_embedding_model: str = "clip-vit-b32-int8"
+    # Model files live here (gitignored). Relative paths resolve from the repo root.
+    photo_model_dir: Path = Path("var/models")
+
+    @property
+    def photo_model_path(self) -> Path:
+        return (
+            self.photo_model_dir
+            if self.photo_model_dir.is_absolute()
+            else REPO_ROOT / self.photo_model_dir
+        )
+
+    # --- photo_reuse_web: paid reverse image search (M5). OFF until spend is approved. ---
+    tineye_enabled: bool = False
+    tineye_api_key: SecretStr | None = None
+    tineye_api_url: str = "https://api.tineye.com/rest/"
+    tineye_timeout_seconds: float = Field(default=15.0, gt=0)
+    # Spend cap: paid searches per UTC day across all workers (cache hits are free).
+    tineye_daily_search_cap: int = Field(default=20, ge=0)
+    # Photos searched per check (cost and time); the rest are skipped and the result says so.
+    tineye_max_photos_per_check: int = Field(default=2, ge=1, le=10)
+    tineye_cap_lock_wait_seconds: float = Field(default=5.0, gt=0)
 
     # --- Internal endpoints ---
     # Bearer token for GET /internal/metrics. If unset, the endpoint is open in development/test
@@ -132,6 +159,14 @@ class Settings(BaseSettings):
         anthropic_worst_case = self.llm_cap_lock_wait_seconds + self.anthropic_timeout_seconds * (
             self.anthropic_max_retries + 1
         )
+        tineye_worst_case = self.tineye_cap_lock_wait_seconds + (
+            self.tineye_max_photos_per_check * self.tineye_timeout_seconds
+        )
+        if self.tineye_enabled and tineye_worst_case >= self.job_timeout_seconds:
+            raise ValueError(
+                f"TinEye worst case ({tineye_worst_case:g} s = cap lock wait + photos per check x "
+                f"timeout) must be below JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds:g} s)"
+            )
         if anthropic_worst_case >= self.job_timeout_seconds:
             raise ValueError(
                 f"Anthropic worst case ({anthropic_worst_case:g} s = cap lock wait + timeout x "
