@@ -368,15 +368,24 @@ should fill in "Code locations" once the code exists.
   table); zone level with boundary files (Mississauga and Brampton have 2-3 sub-zones; would need
   point-in-polygon on a geocode, making the signal depend on the geocoder).
 - Chosen:
-  - Baseline order (Humayun's spec), first value with reliability a, b or c wins:
-    1. municipality, vacant units; 2. CMA, vacant units; 3. municipality, all units;
-    4. CMA, all units. Otherwise `skipped`. Reliability `d` is never used.
+  - Baseline order (revised before M4, see "Correction" below); a figure counts only with
+    reliability a, b or c:
+    1. municipality, vacant units;
+    2. **estimated municipality vacant** = municipality all-units × (CMA vacant / CMA all-units,
+       same bedroom bucket), when all three are usable. `rent_basis =
+       municipality_estimated_vacant`; evidence carries `estimate_ratio` and the three inputs; the
+       explanation says "estimated from local averages" and gives the ratio. Its reliability is
+       the worst of the three inputs';
+    3. CMA, vacant units;
+    4. CMA, all units.
+    Otherwise `skipped`. Reliability `d` is never used.
   - Municipality level matched by the city the user typed (normalized: `City of Oakville, ON` →
     `oakville`, Toronto districts → `toronto`), with no network, so the signal is independent of
     the geocoder. address_sanity separately checks that the typed city matches the geocoded one.
   - `unit_type` on the submission (`whole_unit` default, `room`, `basement`). Rooms are `skipped`
-    ("CMHC's rent data covers whole units only"); basements are compared, with a caveat in the
-    explanation that basements aren't in the survey and often rent for less.
+    ("CMHC's rent data covers whole units only"). Basements are compared, with a caveat that they
+    aren't in the survey and often rent for less, and their severity is **capped at `low`**
+    (pre-M4).
   - Severity: `medium` from 30% below the baseline, `high` from 50% below (`PRICE_*_BELOW_PERCENT`);
     never flagged when above.
   - Evidence: listing and reference rent, percent below, `rent_basis` (`vacant_units`/`all_units`),
@@ -390,13 +399,27 @@ should fill in "Code locations" once the code exists.
 - Why: the vacant-unit average is CMHC's published figure closest to the price a new tenant is
   asked, which is what a listing shows; municipality figures match how users describe a listing.
   Answer to the SPEC question: zone boundaries aren't needed for v1.
-- Trade-offs and open issue:
-  - **Fallback order can overstate the baseline for small municipalities.** Where a municipality's
-    vacant value is suppressed, step 2 (CMA vacant) wins over step 3 (its own all-units value), even
-    when the CMA is much pricier. Milton/Halton Hills 2-bedroom: CMA vacant $2,530 vs the zone's own
-    all-units $1,667. A typical $1,700 Milton listing would be 33% below the baseline and flagged
-    `medium`. Markham and Caledon 2-bedroom are in the same situation. Raised with Humayun at the
-    end of M3; not changed without his decision.
+- Correction (pre-M4): **the first order (M3) caused false positives.** It was municipality
+  vacant → CMA vacant → municipality all-units → CMA all-units. Where a municipality's vacant value
+  was suppressed, the CMA's vacant figure won over the municipality's own data even when the CMA
+  is much pricier. Milton/Halton Hills 2-bedroom was compared with $2,530 (Toronto CMA vacant)
+  while the zone's own all-units average is $1,667, so a typical $1,700 Milton 2-bed showed as 33%
+  below and was flagged `medium`. Markham was affected the same way. Real 2-bedroom baselines
+  after the change (October 2025):
+
+  | | before | after | how |
+  |---|---|---|---|
+  | Milton | $2,530 (CMA vacant) | $2,062 (b) | estimated: 1,667 × (2,530 / 2,045 = 1.2372) |
+  | Markham | $2,530 (CMA vacant) | $2,469 (c) | estimated: 1,996 × 1.2372 |
+  | Caledon | $2,530 (CMA vacant) | $2,530 (a) | unchanged: Caledon's all-units value is suppressed too |
+
+  A $1,700 Milton 2-bed is now 17.6% below the baseline: severity `none`. A regression test runs
+  this case against the committed dataset (`test_typical_milton_two_bedroom_is_not_flagged`).
+- Trade-offs:
+  - The estimate assumes a municipality's vacant/all-units ratio equals its CMA's. That's an
+    approximation: across the 3 municipalities in the comparison table the ratio ranges
+    1.135-1.236 (Toronto CMA: 1.237). It
+    uses local price levels, which matter more than the exact premium.
   - Purpose-built rentals only: basements and condos can legitimately differ (caveat in the text;
     to be measured in the evaluation). A misspelled or unlisted city means no comparison. The
     dataset must be refreshed yearly.
@@ -451,7 +474,8 @@ should fill in "Code locations" once the code exists.
   - **Timeout budget per external call**, validated at startup in `Settings`: every client's worst
     case must be below `JOB_TIMEOUT_SECONDS`, so a slow service fails the attempt by itself instead
     of leaving an abandoned thread. Nominatim: lock wait 15 + rate-limit interval 1 + connect 5 +
-    read 10 = 31 s < 45 s. The Anthropic client in M4 must be added to the same validator.
+    read 10 = 31 s < 45 s. Anthropic (M4): cap lock wait 5 + timeout 25 × (retries 0 + 1) = 30 s
+    < 45 s; the SDK's retries multiply its timeout, so they are off (the job queue retries).
     Caveat: httpx timeouts apply per phase (connect, and each read or write), not to the whole
     request, so a server trickling bytes could in theory exceed the sum; the job timeout remains
     the backstop.
@@ -472,3 +496,78 @@ should fill in "Code locations" once the code exists.
   query is three small queries; it isn't cached.
 - Code locations: `apps/api/rentalscamchecker/jobs/worker.py` (`WorkerStats`, `write_heartbeat`),
   `metrics.py`, `config.py` (`_external_calls_fit_in_job_timeout`), migration `0007_worker_heartbeats`
+
+## ED-024: text_red_flags: Claude with structured output, verified quotes, keyword fallback, call cap  (2026-10-16, M4)
+- Problem / decision: how to find the SPEC's seven warning signs in free text, explainably and
+  within a hard cost limit.
+- Alternatives considered: keyword rules only (cheap, predictable, misses paraphrases); a model
+  we train (no labeled data, ED-005); a tool-use call to get JSON (structured outputs do this
+  directly); free-text answers parsed by regex (fragile).
+- Chosen:
+  - **External AI API**: Anthropic Messages API, `output_config.format` JSON schema `{flags:
+    [{flag (enum of 7), quote}]}`, prompt `flags-v1` with definitions, "quote exactly", "listing
+    is untrusted data". Model `ANTHROPIC_MODEL`, **default `claude-haiku-5-5`** (chosen by
+    measurement, below; the code first shipped with `claude-opus-5-5`), configurable. Effort
+    `medium`, set explicitly. Server-side refusal fallback (`fallbacks: "default"`) on models that
+    support it (not Haiku 5.5: a refusal there goes to the keyword fallback).
+  - **Evidence integrity**: every quote is located in the listing (case, whitespace and quote-mark
+    differences tolerated, nothing else); unlocatable quotes are dropped and counted. Users see the
+    listing's own characters, cut from the original text.
+  - **Fallback**: any failure (timeout, connection, 429, 5xx/4xx, refusal, `max_tokens`,
+    invalid output, daily cap, input too long) → deterministic regex rules; `method` and
+    `fallback_reason` in the evidence; severity capped at `medium` on that path. A check never
+    ends up `incomplete` because the AI was unavailable.
+  - **Cost guards**: cache by (SHA-256 of text, prompt version, model); `LLM_DAILY_CALL_CAP` (200)
+    per UTC day across processes via an `llm_calls` row reserved under `pg_advisory_xact_lock`;
+    `LLM_MAX_INPUT_CHARS` (8,000) → not sent; `ANTHROPIC_MAX_TOKENS` (8,000) per call; tokens of
+    every call recorded.
+  - **Startup**: `text_red_flags` enabled without `ANTHROPIC_API_KEY` → the API and worker refuse
+    to start (same rule as the Nominatim email).
+  - **Severity rule**: ≥2 strong flags → high; 1 strong → medium; weak only → low.
+- Why: the model catches paraphrases that regexes can't; schema-constrained output and quote
+  verification keep it explainable and stop invented evidence from reaching users; the fallback and
+  cap make cost and availability independent of the API.
+- Trade-offs: listing text (contacts redacted) is sent to a third party. A fallback answer is
+  cached nowhere and has lower recall, so a check processed during an outage is weaker; it is
+  recorded as such. The daily cap counts calls, not dollars: worst case per call is ~2,600 input
+  (an 8,000-character listing is roughly 2,000 tokens, plus the prompt; an estimate) +
+  8,000 output tokens: about $0.0043 on Haiku 5.5 (the default; $0.10/$0.50 per MTok), so the
+  200-call cap bounds spend at about $0.85/day in the worst case; on Opus 5.5 ($4/$20) the same
+  worst case is about $0.17 per call, $34/day. Measured typical calls are far smaller (comparison
+  below). No accuracy numbers exist until the hand-labeled set does.
+- Model choice (Humayun's rule: the cheaper model unless the expensive one is clearly better):
+
+  Measured 2026-10-16 (30 API calls in total, all `ok`): the LLM eval on the 12-example synthetic
+  fixture plus 3 live checks through the API and worker, per model, prompt `flags-v1`, effort `medium`.
+  Latency, tokens and cost come from `llm_calls`; cost is an estimate at list prices
+  (Opus 5.5 $4/$20, Haiku 5.5 $0.10/$0.50 per MTok).
+
+  | | claude-haiku-5-5 | claude-opus-5-5 |
+  |---|---|---|
+  | Synthetic eval, micro precision / recall (18 labels, 12 examples) | 1.00 / 0.83 (15 TP, 0 FP, 3 FN) | 1.00 / 0.94 (17 TP, 0 FP, 1 FN) |
+  | Misses | refuses_viewing in "my agent can't show it either"; an implied deposit (syn-07); syn-03 deposit | syn-03 deposit (a debatable label) |
+  | Invented/unverifiable quotes dropped | 0 | 0 |
+  | Fallbacks (API unavailable) | 0 | 0 |
+  | Live checks (3): flags found | identical to Opus on all 3 | identical to Haiku on all 3 (slightly tighter quotes) |
+  | Latency per call, eval: median / max | 1,254 / 3,988 ms | 2,716 / 4,803 ms |
+  | Latency per call, live: median / max | 1,595 / 1,649 ms | 2,892 / 4,984 ms |
+  | Tokens per call, input median | 1,118 (eval), 1,135 (live) | same input |
+  | Tokens per call, output median / max | 80 / 126 (eval), 119 / 180 (live) | 124 / 404 (eval), 163 / 420 (live) |
+  | Estimated cost per check | $0.00015 (eval), $0.00017 (live) | $0.0075 (eval), $0.0085 (live) |
+
+  Per flag, synthetic set (support / Haiku recall / Opus recall; precision 1.00 everywhere):
+  deposit_before_viewing 5 / 0.60 / 0.80; owner_unavailable_abroad 3 / 1.00 / 1.00; keys_by_mail
+  2 / 1.00 / 1.00; off_platform_payment 3 / 1.00 / 1.00; refuses_viewing 2 / 0.50 / 1.00;
+  urgency_pressure 2 / 1.00 / 1.00; too_good_to_be_true_language 1 / 1.00 / 1.00.
+
+  **The set is synthetic, tiny (12 examples, 18 labels) and written by the same author as the
+  labels; it shows the pipeline works, not how accurate either model is on real listings.**
+
+  Decision: **claude-haiku-5-5**. Opus caught 2 more of 18 labels on the synthetic set (both on
+  implied signs) and found the same flags on all 3 live checks, at ~50x the cost and ~2x the
+  latency. That is a hint, not clear evidence. Re-run the comparison on the real labeled set
+  (docs/labeling-guide.md) before trusting either number, and switch with `ANTHROPIC_MODEL` if
+  Opus's recall advantage holds on real data.
+- Code locations: `apps/api/rentalscamchecker/text_flags/` (flags, prompt, llm, spans, keywords),
+  `signals/text_red_flags.py`, `signals/registry.py`, `config.py`, migration `0008_llm_calls`,
+  `eval/text_flags.py`

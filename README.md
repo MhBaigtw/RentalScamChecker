@@ -34,7 +34,8 @@ off, `pip install` fails inside deeply nested folders (see docs/problems-and-sol
 git clone https://github.com/MhBaigtw/RentalScamChecker.git
 cd RentalScamChecker
 copy .env.example .env
-# then set NOMINATIM_CONTACT_EMAIL in .env (address_sanity needs it; the API won't start without it)
+# then set NOMINATIM_CONTACT_EMAIL (address_sanity) and ANTHROPIC_API_KEY (text_red_flags) in .env;
+# the API won't start without them while those signals are enabled (ENABLED_SIGNALS)
 
 # 1. Database
 docker compose up -d --wait
@@ -74,6 +75,7 @@ it resolves to Cygwin). More detail, including the no-Docker fallback:
 
 ## Limitations
 
-Pre-alpha. Two risk signals run so far: price vs CMHC averages (Sheridan's area only: Toronto and
-Hamilton CMAs) and address checks via OpenStreetMap. Scoring and the report UI come later; see
+Pre-alpha. Three risk signals run so far: price vs CMHC averages (Sheridan's area only: Toronto and
+Hamilton CMAs), address checks via OpenStreetMap, and warning signs in the listing text (Anthropic's
+Claude API, with a keyword fallback; no accuracy numbers yet, see docs/ai-ml-design.md). Scoring and the report UI come later; see
 TASKS.md for the plan.

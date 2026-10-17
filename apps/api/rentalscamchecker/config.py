@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # --- Signals and orchestration (M2) ---
     # Comma-separated signal names to run for every new check (see signals/registry.py).
-    enabled_signals: str = "stub"
+    enabled_signals: str = "price_vs_market,address_sanity,text_red_flags"
     stub_signal_sleep_seconds: float = 1.0
     # The aggregator runs when every signal has a result, or after this long, whichever is first.
     check_timeout_seconds: float = 120.0
@@ -58,6 +58,26 @@ class Settings(BaseSettings):
     geocoder_timeout_seconds: float = Field(default=10.0, gt=0)
     # Longest wait for our turn at the Nominatim rate limit (a Postgres lock_timeout).
     geocoder_lock_wait_seconds: float = Field(default=15.0, gt=0)
+
+    # --- text_red_flags: Anthropic API (M4, ED-024) ---
+    # Read from the environment / .env; never logged. Required when text_red_flags is enabled.
+    anthropic_api_key: SecretStr | None = None
+    # Configurable. Default chosen by measurement (ED-024): on the M4 comparison claude-haiku-5-5
+    # matched claude-opus-5-5 on live checks at ~1/50 of the cost and about half the latency.
+    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    # Per-request HTTP timeout. SDK retries are off (the job queue retries), so this is the
+    # whole wall-clock budget of one call.
+    anthropic_timeout_seconds: float = Field(default=25.0, gt=0)
+    anthropic_max_retries: int = Field(default=0, ge=0)
+    # Output ceiling per call (thinking + JSON). Caps the worst-case cost of one call.
+    anthropic_max_tokens: int = Field(default=8000, ge=1024)
+    # Cost guards: at most this many API calls per UTC day across all workers (cache hits are
+    # free), and listings longer than this go to the keyword fallback instead of the API.
+    llm_daily_call_cap: int = Field(default=200, ge=0)
+    llm_max_input_chars: int = Field(default=8000, ge=100)
+    # Longest wait to reserve a call under the daily cap (a Postgres lock).
+    llm_cap_lock_wait_seconds: float = Field(default=5.0, gt=0)
 
     # --- Internal endpoints ---
     # Bearer token for GET /internal/metrics. If unset, the endpoint is open in development/test
@@ -106,6 +126,16 @@ class Settings(BaseSettings):
                 f"geocoder worst case ({geocoder_worst_case:g} s = lock wait + rate-limit interval "
                 f"+ connect + read timeouts) must be below JOB_TIMEOUT_SECONDS "
                 f"({self.job_timeout_seconds:g} s)"
+            )
+        # The SDK applies its timeout per attempt and retries timeouts, so the wall clock can
+        # reach timeout x (max_retries + 1).
+        anthropic_worst_case = self.llm_cap_lock_wait_seconds + self.anthropic_timeout_seconds * (
+            self.anthropic_max_retries + 1
+        )
+        if anthropic_worst_case >= self.job_timeout_seconds:
+            raise ValueError(
+                f"Anthropic worst case ({anthropic_worst_case:g} s = cap lock wait + timeout x "
+                f"(retries + 1)) must be below JOB_TIMEOUT_SECONDS ({self.job_timeout_seconds:g} s)"
             )
         return self
 

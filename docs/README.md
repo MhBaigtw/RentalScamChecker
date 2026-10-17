@@ -15,4 +15,5 @@ the end of each milestone. After the build, these files become Humayun's study c
 | testing.md | Test strategy, how to run each suite, what is and isn't covered | M0 onward |
 | deployment.md | Local setup (incl. Windows fallbacks), production deploy, rollback | M0 onward |
 | interview-preparation.md | Drafted at M10 from the real code | M10 |
+| labeling-guide.md | How to build `eval/private/text_labels.jsonl`: format, a worked example per flag, edge-case rules, legitimate sources | M4 |
 | learning-guide.md | Drafted at M10: what to study, in which order, with file references | M10 |

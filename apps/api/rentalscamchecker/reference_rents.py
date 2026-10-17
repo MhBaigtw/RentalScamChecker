@@ -31,8 +31,8 @@ CITY_ALIASES = {
     "east york": "toronto",
     "york": "toronto",
 }
-# Baselines in order of preference (ED-021): what new tenants are asked first.
-RENT_BASIS_ORDER = ("vacant_units", "all_units")
+# rent_basis of an estimated value: municipality all-units x (CMA vacant / CMA all-units).
+ESTIMATED_VACANT = "municipality_estimated_vacant"
 _REQUIRED = (
     "geography_type",
     "geography_code",
@@ -51,13 +51,25 @@ _REQUIRED = (
 
 
 @dataclass(frozen=True)
+class Estimate:
+    """How an estimated municipal vacant rent was computed (ED-021)."""
+
+    # CMA vacant / CMA all-units for the same bedroom bucket, rounded to 4 decimals.
+    ratio: float
+    municipality_all_units_cents: int
+    cma_vacant_cents: int
+    cma_all_units_cents: int
+
+
+@dataclass(frozen=True)
 class Reference:
     rent_cents: int
     reliability: str
     geography_name: str
     # "municipality" when the city's own figure was used, "cma" for the metropolitan fallback.
     level: str
-    # "vacant_units" (asking rents of empty units) or "all_units" (overall average).
+    # "vacant_units" (asking rents of empty units), "municipality_estimated_vacant" (see Estimate)
+    # or "all_units" (overall average).
     rent_basis: str
     # The CMHC table row the value was read from, e.g. "Zone 29 - Milton/Halton Hills".
     source_geography: str
@@ -66,6 +78,7 @@ class Reference:
     survey_month: int
     source: str
     source_url: str
+    estimate: Estimate | None = None
 
 
 def normalize_city(raw: str) -> str:
@@ -147,28 +160,67 @@ def load_rows(session: Session, rows: list[dict[str, object]]) -> int:
 def find_reference(session: Session, city: str, bedrooms: int) -> Reference | None:
     """The newest usable reference rent for this city and bedroom count (ED-021).
 
-    Tried in this order; the first figure published with reliability a, b or c wins:
+    Tried in this order; a figure counts only if published with reliability a, b or c:
     1. the municipality's vacant-unit average;
-    2. its CMA's vacant-unit average;
-    3. the municipality's all-units average;
-    4. its CMA's all-units average.
+    2. an estimated municipal vacant rent: the municipality's all-units average scaled by the
+       CMA's vacant/all-units ratio for the same bedroom bucket (needs all three figures);
+    3. the CMA's vacant-unit average;
+    4. the CMA's all-units average.
     None if the city isn't in the dataset or nothing usable is published.
+
+    Step 2 replaced "CMA vacant before municipal all-units": the CMA figure overstated the
+    baseline for cheaper municipalities (Milton 2-bed: $2,530 vs its own $1,667 all-units).
     """
     bucket = bedroom_bucket(bedrooms)
     name = normalize_city(city)
     cma_name = _cma_of(session, name)
     if cma_name is None:
         return None
-    for basis in RENT_BASIS_ORDER:
-        for geography_type, geography, level in (
-            ("csd", name, "municipality"),
-            ("cma", cma_name.casefold(), "cma"),
-        ):
-            row = _newest(session, geography_type, geography, basis, bucket)
-            if row is not None and row.avg_rent_cents is not None:
-                if row.reliability in USABLE_RELIABILITY:
-                    return _reference(row, level)
+    cma = cma_name.casefold()
+    own_vacant = _usable(_newest(session, "csd", name, "vacant_units", bucket))
+    if own_vacant is not None:
+        return _reference(own_vacant, "municipality")
+    own_all = _usable(_newest(session, "csd", name, "all_units", bucket))
+    cma_vacant = _usable(_newest(session, "cma", cma, "vacant_units", bucket))
+    cma_all = _usable(_newest(session, "cma", cma, "all_units", bucket))
+    if own_all is not None and cma_vacant is not None and cma_all is not None:
+        return _estimated(own_all, cma_vacant, cma_all)
+    if cma_vacant is not None:
+        return _reference(cma_vacant, "cma")
+    if cma_all is not None:
+        return _reference(cma_all, "cma")
     return None
+
+
+def _usable(row: ReferenceRent | None) -> ReferenceRent | None:
+    if row is None or row.avg_rent_cents is None or row.reliability not in USABLE_RELIABILITY:
+        return None
+    return row
+
+
+def _estimated(
+    own_all: ReferenceRent, cma_vacant: ReferenceRent, cma_all: ReferenceRent
+) -> Reference:
+    assert own_all.avg_rent_cents and cma_vacant.avg_rent_cents and cma_all.avg_rent_cents  # noqa: S101
+    ratio = round(cma_vacant.avg_rent_cents / cma_all.avg_rent_cents, 4)
+    # Whole dollars, like every other CMHC figure.
+    cents = round(own_all.avg_rent_cents * ratio / 100) * 100
+    worst = max(r.reliability or "d" for r in (own_all, cma_vacant, cma_all))
+    base = _reference(own_all, "municipality")
+    return Reference(
+        **{
+            **base.__dict__,
+            "rent_cents": cents,
+            "reliability": worst,
+            "rent_basis": ESTIMATED_VACANT,
+            "estimate": Estimate(
+                ratio=ratio,
+                municipality_all_units_cents=own_all.avg_rent_cents,
+                cma_vacant_cents=cma_vacant.avg_rent_cents,
+                cma_all_units_cents=cma_all.avg_rent_cents,
+            ),
+        }
+    )
 
 
 def _cma_of(session: Session, city: str) -> str | None:

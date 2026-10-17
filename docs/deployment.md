@@ -46,6 +46,8 @@ start of M1; the container and its data were intact afterwards).
   refuse to start without it. The public Nominatim service allows at most 1 request/s for our
   whole deployment, which the `rate_limits` row enforces across worker processes (ED-022).
 - `/internal/metrics`: set `INTERNAL_METRICS_TOKEN` in any shared environment (ED-023).
+- `ANTHROPIC_API_KEY` is required while `text_red_flags` is enabled (M4). Calls are paid: keep
+  `LLM_DAILY_CALL_CAP` low (default 200) until spend is approved, and watch `llm_calls` for token use.
 
 ## Running the worker (M2)
 

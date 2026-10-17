@@ -63,12 +63,12 @@ report shows evidence (reference rent, year, CMA, percentage below).
 
 ## M4 — text_red_flags (week 4)
 
-- [ ] Prompt + JSON schema for the flag set; structured output via the Anthropic API; model name
+- [x] Prompt + JSON schema for the flag set; structured output via the Anthropic API; model name
       configurable; prompt version stored with every result; `llm_cache` by content hash.
-- [ ] Each flag returns the quoted evidence span; spans validated against the source text.
-- [ ] Deterministic keyword fallback when the API errors or times out; result marks which path ran.
-- [ ] Cost guard: max input length, per-day call cap.
-- [ ] `eval/text_flags.py`: runs the signal over `eval/private/text_labels.jsonl`, prints per-flag
+- [x] Each flag returns the quoted evidence span; spans validated against the source text.
+- [x] Deterministic keyword fallback when the API errors or times out; result marks which path ran.
+- [x] Cost guard: max input length, per-day call cap.
+- [x] `eval/text_flags.py`: runs the signal over `eval/private/text_labels.jsonl`, prints per-flag
       precision/recall with the set size. (Humayun builds the labeled set; until it exists, the
       harness runs on a tiny synthetic fixture and says so.)
 
@@ -185,3 +185,17 @@ outside Claude Code.
   C same address, room $750 → price skipped (whole units only); address served from cache. Nominatim: 2 requests,
   1 cache hit; contact email not in logs. /internal/metrics: 1 worker alive, 0 timeouts, 0 abandoned threads,
   jobs_done_total 9 after the next heartbeat.
+- 2026-10-16, M4 (branch m4-text-red-flags). Pre-M4: estimated municipal vacant baseline (Milton 2-bed $2,530 → $2,062;
+  a $1,700 Milton 2-bed now 17.6% below, severity none; regression test on the real dataset), real signals by
+  default, basement severity capped at low. M4: text_red_flags (Anthropic Messages API, structured output, prompt
+  flags-v1, quotes verified against the listing, keyword fallback, cache, daily cap 200 via advisory lock, 25 s
+  single attempt; startup budget 30 s < 45 s job timeout). Migration 0008 round-trips; ruff, mypy strict (+ linux)
+  clean; pytest 304/304 locally (101 integration; no network: fake Anthropic client). Live, 30 API calls total, all ok
+  (est. $0.118): synthetic LLM eval (12 examples, 18 labels; SYNTHETIC, author-written) Haiku 5.5 P 1.00 / R 0.83,
+  Opus 5.5 P 1.00 / R 0.94, 0 invented quotes dropped, 0 fallbacks; 3 live checks per model through API + worker
+  found identical flags (L1 high: abroad/deposit/keys; L2 none; L3 high: deposit/Bitcoin/no viewings/urgency); latency
+  median Haiku 1,254-1,595 ms vs Opus 2,716-2,892 ms; est. cost per check Haiku $0.00015-0.00017 vs Opus
+  $0.0075-0.0085 → default claude-haiku-5-5 (ED-024). Fallback path: tests simulate timeout and 503 end to end
+  (check completes with method keyword_rules, severity capped at medium). Eval harness reports written to
+  eval/private/reports/ (keyword, Haiku, Opus). docs/labeling-guide.md added; the harness validates the label file
+  by line number.

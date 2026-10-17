@@ -53,6 +53,7 @@ CONTACT_SOURCES = ("field", "text")
 SIGNAL_STATUSES = ("ok", "skipped", "error")
 SEVERITIES = ("none", "low", "medium", "high")
 JOB_STATUSES = ("queued", "running", "done", "failed", "dead")
+LLM_CALL_OUTCOMES = ("started", "ok", "refused", "truncated", "invalid", "error")
 GEOGRAPHY_TYPES = ("cma", "csd")
 RENT_BASES = ("vacant_units", "all_units")
 
@@ -308,6 +309,27 @@ class WorkerHeartbeat(Base):
     jobs_failed_total: Mapped[int] = mapped_column(Integer)
     jobs_timed_out_total: Mapped[int] = mapped_column(Integer)
     abandoned_threads_alive: Mapped[int] = mapped_column(Integer)
+
+
+class LlmCall(Base):
+    """One row per Anthropic API call attempt (M4, ED-024): the daily cap counts these rows, and
+    the token counts make spend auditable. Reserved (outcome 'started') before the request."""
+
+    __tablename__ = "llm_calls"
+    __table_args__ = (
+        CheckConstraint(_in("outcome", LLM_CALL_OUTCOMES), name="outcome"),
+        Index("ix_llm_calls_called_at", "called_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    called_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    model: Mapped[str] = mapped_column(Text)
+    prompt_version: Mapped[str] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, server_default="started")
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
 
 
 class LlmCache(Base):

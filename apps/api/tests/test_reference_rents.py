@@ -97,15 +97,25 @@ def test_loading_twice_does_not_duplicate(loaded: sessionmaker[Session]) -> None
             (260000, "municipality", "vacant_units", "Oakville", 2025, "b"),
         ),
         ("Mississauga", 1, (200000, "municipality", "vacant_units", "Mississauga", 2025, "a")),
-        # Step 2: the CMA's vacant figure beats the municipality's all-units figure.
-        ("Oakville", 4, (280000, "cma", "vacant_units", "Toronto", 2025, "a")),  # 3+ bucket
+        # Step 2: estimated municipal vacant = own all-units x CMA vacant / CMA all-units.
+        # Oakville 3+: 2,500 x (2,800 / 2,300 = 1.2174) = 3,044; reliability = worst input (b).
+        (
+            "Oakville",
+            4,
+            (304400, "municipality", "municipality_estimated_vacant", "Oakville", 2025, "b"),
+        ),
+        # Toronto 1-bed: own vacant is "d"; 1,750 x (1,950 / 1,800 = 1.0833) = 1,896.
+        (
+            "North York",
+            1,
+            (189600, "municipality", "municipality_estimated_vacant", "Toronto", 2025, "a"),
+        ),
+        # Step 3: no usable own figure at all -> the CMA's vacant figure.
         ("Oakville", 1, (195000, "cma", "vacant_units", "Toronto", 2025, "a")),  # no own row
-        ("North York", 1, (195000, "cma", "vacant_units", "Toronto", 2025, "a")),  # own is "d"
         ("Caledon", 2, (250000, "cma", "vacant_units", "Toronto", 2025, "a")),  # suppressed
-        ("Milton", 2, (250000, "cma", "vacant_units", "Toronto", 2025, "a")),
-        # Step 3: no vacant figure anywhere -> the municipality's all-units figure.
-        ("Hamilton", 2, (150000, "municipality", "all_units", "Hamilton", 2025, "a")),
-        # Step 4: only the CMA's all-units figure is usable.
+        ("Milton", 2, (250000, "cma", "vacant_units", "Toronto", 2025, "a")),  # own is "d"
+        # Step 4: no CMA vacant figure, so no estimate either -> the CMA's all-units figure.
+        ("Hamilton", 2, (160000, "cma", "all_units", "Hamilton", 2025, "a")),
         ("Hamilton", 1, (140000, "cma", "all_units", "Hamilton", 2025, "a")),
     ],
 )
@@ -125,6 +135,20 @@ def test_find_reference_fallback_order(
         ref.reliability,
     )
     assert got == expected
+
+
+@pytest.mark.integration
+def test_estimate_records_its_ratio_and_inputs(loaded: sessionmaker[Session]) -> None:
+    with loaded() as s:
+        ref = find_reference(s, "Oakville", 3)
+
+    assert ref is not None and ref.estimate is not None
+    assert ref.estimate.ratio == 1.2174
+    assert (
+        ref.estimate.municipality_all_units_cents,
+        ref.estimate.cma_vacant_cents,
+        ref.estimate.cma_all_units_cents,
+    ) == (250000, 280000, 230000)
 
 
 @pytest.mark.integration

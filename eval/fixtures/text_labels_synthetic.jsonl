@@ -1,0 +1,12 @@
+{"id": "syn-01", "text": "Bright 2 bedroom basement near Sheridan Trafalgar. Separate entrance, laundry. Viewings Saturday 2-4pm. Rent $1,750, first and last at lease signing, Interac e-Transfer.", "flags": []}
+{"id": "syn-02", "text": "Lovely 1 bed condo. I am currently out of the country for work, so my agent can't show it either. Send the deposit to hold the unit and I will courier the keys to you.", "flags": ["owner_unavailable_abroad", "refuses_viewing", "deposit_before_viewing", "keys_by_mail"]}
+{"id": "syn-03", "text": "Room in shared house, all utilities included. Many people are interested so act fast, first to send payment gets it!", "flags": ["urgency_pressure", "deposit_before_viewing"]}
+{"id": "syn-04", "text": "Spacious 3 bed townhouse in Brampton. No pets, no smoking. Landlord lives nearby and can show it any evening this week.", "flags": []}
+{"id": "syn-05", "text": "Payment only by Bitcoin or gift cards, no exceptions. Unit is ready now.", "flags": ["off_platform_payment"]}
+{"id": "syn-06", "text": "Way below market for Oakville! Too good to pass up. Fully furnished 2 bed, everything included.", "flags": ["too_good_to_be_true_language"]}
+{"id": "syn-07", "text": "Due to my missionary work abroad I am not able to meet. Once the first month is paid by Western Union the keys will be mailed by Canada Post.", "flags": ["owner_unavailable_abroad", "deposit_before_viewing", "off_platform_payment", "keys_by_mail"]}
+{"id": "syn-08", "text": "Studio near Square One. Building has a gym and concierge. Book a showing through the management office.", "flags": []}
+{"id": "syn-09", "text": "Sorry, no in-person viewings because of my schedule; I can send more photos. Deposit secures the place.", "flags": ["refuses_viewing", "deposit_before_viewing"]}
+{"id": "syn-10", "text": "Clean 1 bedroom, $1,600. Deposit equal to last month's rent, paid when you sign the lease after the viewing.", "flags": []}
+{"id": "syn-11", "text": "Must rent today only, I have 10 applicants waiting. Pay the holding fee by wire transfer to secure it.", "flags": ["urgency_pressure", "deposit_before_viewing", "off_platform_payment"]}
+{"id": "syn-12", "text": "Owner is deployed overseas with the military. Property manager will meet you on site Sunday for a viewing.", "flags": ["owner_unavailable_abroad"]}

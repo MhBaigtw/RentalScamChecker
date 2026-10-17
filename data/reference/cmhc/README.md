@@ -66,6 +66,6 @@ Load into the database (from `apps/api`):
   and rooms are not in these averages. The signal skips rooms and adds a caveat for basements.
 - Reliability letters: a excellent, b very good, c good, d poor ("use with caution"); the signal
   ignores `d` and falls back.
-- Where a municipality's vacant value is suppressed, the fallback is the CMA's vacant value, which
-  can be far above that municipality's own all-units average (e.g. Milton 2-bedroom: CMA vacant
-  $2,530 vs Milton all units $1,667). See ED-021.
+- Where a municipality's vacant value is suppressed, the signal estimates it from the
+  municipality's all-units average and the CMA's vacant/all-units ratio (e.g. Milton 2-bedroom:
+  1,667 × 1.2372 = $2,062), and only falls back to CMA figures when that isn't possible. See ED-021.
