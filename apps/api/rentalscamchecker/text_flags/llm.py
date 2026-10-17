@@ -179,12 +179,12 @@ class ClaudeFlagExtractor:
         except ValueError as exc:
             self._finish(call_id, "invalid", started, error=str(exc)[:500], **tokens)
             raise LlmUnavailable("invalid_output", str(exc)) from exc
-        self._finish(call_id, "ok", started, **tokens)
+        latency_ms = self._finish(call_id, "ok", started, **tokens)
         log.info(
             "llm_call_ok",
             model=response.model,
             request_id=response._request_id,
-            latency_ms=_ms(started),
+            latency_ms=latency_ms,
             flags=len(flags),
             **tokens,
         )
@@ -216,19 +216,22 @@ class ClaudeFlagExtractor:
         error: str | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
-    ) -> None:
+    ) -> int:
+        """Record the call's outcome; returns the latency stored, so logs show the same number."""
+        latency_ms = _ms(started)
         with self._sessions.begin() as session:
             session.execute(
                 update(LlmCall)
                 .where(LlmCall.id == call_id)
                 .values(
                     outcome=outcome,
-                    latency_ms=_ms(started),
+                    latency_ms=latency_ms,
                     error=error,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                 )
             )
+        return latency_ms
 
 
 def _parse(response: Any) -> list[dict[str, str]]:

@@ -62,9 +62,9 @@ class Settings(BaseSettings):
     # --- text_red_flags: Anthropic API (M4, ED-024) ---
     # Read from the environment / .env; never logged. Required when text_red_flags is enabled.
     anthropic_api_key: SecretStr | None = None
-    # Configurable; the default follows Anthropic's current guidance. A cheaper model (e.g.
-    # claude-haiku-5-5) is the owner's call, not a code default.
-    anthropic_model: str = "claude-opus-5-5"
+    # Configurable. Default chosen by measurement (ED-024): on the M4 comparison claude-haiku-5-5
+    # matched claude-opus-5-5 on live checks at ~1/50 of the cost and about half the latency.
+    anthropic_model: str = "claude-haiku-5-5"
     anthropic_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     # Per-request HTTP timeout. SDK retries are off (the job queue retries), so this is the
     # whole wall-clock budget of one call.
