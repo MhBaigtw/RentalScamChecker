@@ -29,6 +29,8 @@ from rentalscamchecker.jobs.queue import ClaimedJob
 from rentalscamchecker.jobs.worker import JobHandler, PermanentJobError, Worker, WorkerConfig
 from rentalscamchecker.models import Check, Job
 from rentalscamchecker.models import SignalResult as SignalResultRow
+from rentalscamchecker.scoring.config import ScoringConfig, load_config
+from rentalscamchecker.scoring.rules import Score, SignalOutcome, score
 from rentalscamchecker.signals.base import CheckInput, Signal, SignalContext, SignalResult
 from rentalscamchecker.signals.registry import enabled_signals
 
@@ -127,33 +129,18 @@ class SignalJobHandler:
 
 
 class AggregateJobHandler:
-    """Finalizes a check. Scoring (risk levels) arrives in M7; for now the aggregator only marks
-    the check complete, and "incomplete" when any expected signal errored or never finished."""
+    """Finalizes a check: records an error result for each expected signal that never finished,
+    scores the results (scoring/, ED-027), stores the levels and marks the check complete."""
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], config: ScoringConfig) -> None:
         self._sessions = session_factory
+        self._config = config
 
     def run(self, job: ClaimedJob) -> None:
         check_id = uuid.UUID(job.payload["check_id"])
         expected: list[SignalKey] = [(n, v) for n, v in job.payload["signals"]]
         with self._sessions.begin() as session:
-            check = session.get(Check, check_id, with_for_update=True)
-            if check is None or check.status == "complete":
-                return  # deleted, or already finalized by an earlier run of this job
-            present = {(r.name, r.version): r.status for r in check.signal_results}
-            for name, version in expected:
-                if (name, version) not in present:
-                    missing = SignalResult(
-                        name=name, version=version, status="error", severity=None
-                    )
-                    _record_result(
-                        session, check_id, missing, started_at=None, error=TIMED_OUT_ERROR
-                    )
-                    present[(name, version)] = "error"
-            any_error = any(present[key] == "error" for key in expected)
-            check.status = "complete"
-            check.risk_level = "incomplete" if any_error else None
-        log.info("check_complete", check_id=str(check_id), incomplete=any_error)
+            finalize_check(session, check_id, expected, self._config)
 
     def on_dead(self, job: ClaimedJob, error: str) -> None:
         # Don't leave the user polling forever: close the check as incomplete.
@@ -165,13 +152,56 @@ class AggregateJobHandler:
                 check.risk_level = "incomplete"
 
 
+def finalize_check(
+    session: Session, check_id: uuid.UUID, expected: list[SignalKey], config: ScoringConfig
+) -> Score | None:
+    """Record an error result for each expected signal that never finished, score the expected
+    results, store both levels and mark the check complete. Returns None if the check is gone or
+    already complete (the aggregate job can run twice)."""
+    check = session.get(Check, check_id, with_for_update=True)
+    if check is None or check.status == "complete":
+        return None
+    present = {(r.name, r.version) for r in check.signal_results}
+    for name, version in expected:
+        if (name, version) not in present:
+            missing = SignalResult(name=name, version=version, status="error", severity=None)
+            _record_result(session, check_id, missing, started_at=None, error=TIMED_OUT_ERROR)
+    session.expire(check, ["signal_results"])
+    expected_keys = set(expected)
+    outcomes = [
+        SignalOutcome(r.name, r.status, r.severity, r.evidence)
+        for r in check.signal_results
+        if (r.name, r.version) in expected_keys
+    ]
+    result = score(outcomes, config)
+    check.status = "complete"
+    check.risk_level = result.level
+    check.independent_risk_level = result.independent_level
+    check.scoring_version = config.version
+    check.risk_details = {
+        "contributing": result.contributing,
+        "missing": result.missing,
+        "graph_capped": result.graph_capped,
+    }
+    log.info(
+        "check_complete",
+        check_id=str(check_id),
+        risk_level=result.level,
+        independent_risk_level=result.independent_level,
+        graph_capped=result.graph_capped,
+        scoring_version=config.version,
+    )
+    return result
+
+
 def build_handlers(
     session_factory: sessionmaker[Session], signals: list[Signal], settings: Settings
 ) -> dict[str, JobHandler]:
     ctx = SignalContext(settings=settings)
     return {
         SIGNAL_JOB: SignalJobHandler(session_factory, {s.name: s for s in signals}, ctx),
-        AGGREGATE_JOB: AggregateJobHandler(session_factory),
+        # Loaded here so a broken scoring config stops the worker at startup.
+        AGGREGATE_JOB: AggregateJobHandler(session_factory, load_config()),
     }
 
 

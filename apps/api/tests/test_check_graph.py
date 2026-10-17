@@ -154,12 +154,18 @@ def test_three_checks_sharing_a_phone_and_a_photo_are_linked_in_each_others_repo
     # contact_reuse ran when each check was submitted, so it saw only the earlier ones.
     assert signal(reports[a], "contact_reuse")["severity"] == "none"
     c_contacts = signal(reports[c], "contact_reuse")
-    assert c_contacts["severity"] == "medium"
     assert c_contacts["evidence"]["contacts_checked"] == [
         {"kind": "phone", "source": "text", "other_checks": 2}
     ]
     assert c_contacts["evidence"]["other_cities"] == ["Mississauga", "Oakville"]
+    # B reused A's photo at another address: B is high on its own evidence, so C's contact link
+    # to B is high (M7, ED-027). A is low on its own evidence.
+    assert c_contacts["severity"] == "high"
+    assert c_contacts["evidence"]["linked_high_risk"] == [
+        {"check": ref(b), "own_signals": ["photo_reuse_internal"]}
+    ]
     assert signal(reports[c], "photo_reuse_internal")["severity"] == "high"
+    assert [reports[x]["risk_level"] for x in (a, b, c)] == ["low", "high", "high"]
 
 
 def test_two_checks_sharing_only_a_photo_at_the_same_address_is_informational(
@@ -182,7 +188,7 @@ def test_two_checks_sharing_only_a_photo_at_the_same_address_is_informational(
             "check": ref(first),
             "created_on": related["checks"][0]["created_on"],
             "city": "Oakville",
-            "risk_level": None,
+            "risk_level": "low",
             "linked_by": ["photo"],
             "same_address": True,
         }
@@ -237,6 +243,7 @@ def seed_check(
                 address_text=address,
                 city=city,
                 risk_level=risk_level,
+                independent_risk_level=risk_level,
             )
         )
         s.flush()
@@ -433,7 +440,7 @@ def test_contact_linked_to_a_high_risk_check_is_high(
     me = seed_check(session_factory, "1 Main St", "Milton", phones=(PHONE,))
     result = run_contact_reuse(session_factory, me)
     assert result.severity == "high"
-    assert result.evidence["prior_risk_levels"] == {"high": 1}
+    assert result.evidence["linked_independent_levels"] == {"high": 1}
     assert result.evidence["linked_checks"][0]["check"] == public_ref(
         result_check_ids(session_factory, exclude=me)[0]
     )

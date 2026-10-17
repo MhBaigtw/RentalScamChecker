@@ -151,4 +151,5 @@ def test_journey_falls_back_to_keyword_rules_when_the_api_fails(
     assert {"owner_unavailable_abroad", "keys_by_mail", "deposit_before_viewing"} <= {
         f["flag"] for f in evidence["flags"]
     }
-    assert body["risk_level"] is None  # the check completed normally, not "incomplete"
+    # The check completed normally (not "incomplete"); one medium signal scores "some".
+    assert body["risk_level"] == "some"

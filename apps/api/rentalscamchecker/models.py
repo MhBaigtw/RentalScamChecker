@@ -74,6 +74,7 @@ class Check(Base):
     __table_args__ = (
         CheckConstraint(_in("status", CHECK_STATUSES), name="status"),
         CheckConstraint(_in("risk_level", RISK_LEVELS), name="risk_level"),
+        CheckConstraint(_in("independent_risk_level", RISK_LEVELS), name="independent_risk_level"),
         CheckConstraint("rent_cents > 0", name="rent_positive"),
         CheckConstraint("bedrooms BETWEEN 0 AND 10", name="bedrooms_range"),
         CheckConstraint(_in("unit_type", UNIT_TYPES), name="unit_type"),
@@ -82,7 +83,14 @@ class Check(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     status: Mapped[str] = mapped_column(Text, server_default="pending")
+    # Set by the aggregator (scoring/, ED-027). risk_level is what the report shows;
+    # independent_risk_level leaves out results that depend on other checks' risk, and is the only
+    # level other checks read (so risk spreads at most one hop through the graph).
     risk_level: Mapped[str | None] = mapped_column(Text)
+    independent_risk_level: Mapped[str | None] = mapped_column(Text)
+    # Names of contributing / missing signals and whether the graph cap applied. No points or
+    # weights (SPEC 10).
+    risk_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     scoring_version: Mapped[str | None] = mapped_column(Text)
     # No foreign key until the users table exists (M8).
     user_id: Mapped[uuid.UUID | None]

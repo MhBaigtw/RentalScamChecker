@@ -1,5 +1,5 @@
-# Fast checks on every commit. Type checks and tests run in CI (and via the commands in
-# docs/testing.md) because they need the full dependency set and are slower.
+# Checks on every commit. ruff and mypy cover the API and eval/ (M7); tests run in CI (and via the
+# commands in docs/testing.md) because they need Postgres and are slower.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -16,13 +16,22 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.1
     hooks:
+      # eval/ has its own ruff.toml (extends the API settings), picked up per file.
       - id: ruff-check
         args: ["--fix"]
-        files: ^apps/api/
+        files: ^(apps/api|eval)/
       - id: ruff-format
-        files: ^apps/api/
+        files: ^(apps/api|eval)/
   - repo: local
     hooks:
+      # Same two runs as CI, with the API venv (needs apps/api/.venv). Whole-project, not per
+      # file: mypy needs the imports anyway, and its cache keeps repeat runs to a few seconds.
+      - id: mypy
+        name: mypy (apps/api strict, tests, alembic, eval)
+        language: system
+        entry: bash scripts/precommit-mypy.sh
+        files: ^(apps/api|eval)/.*\.py$
+        pass_filenames: false
       - id: web-eslint
         name: eslint (apps/web)
         language: system

@@ -86,6 +86,17 @@ Use this only if Docker Desktop stops working. Not exercised in M0 because Docke
 3. If building pgvector natively is not practical, a hosted dev database with pgvector (for
    example a free Neon project) is acceptable, **but ask Humayun first** (new external service).
 
+## Web app and API together (M7)
+
+- The browser calls the API directly: set `NEXT_PUBLIC_API_URL` for `next build` (it is inlined
+  at build time) and list the web origin(s) in the API's `WEB_ORIGINS` (CORS, ED-028). Locally
+  the defaults match: web on 127.0.0.1/localhost:3100, API on 127.0.0.1:8100.
+- The worker loads the scoring config (`rentalscamchecker/scoring/v1.toml`, shipped as package
+  data) at start and refuses to start if it is invalid.
+- Browser tests: `cd apps/web && npx playwright install chromium` once (about 720 MB under
+  `%LOCALAPPDATA%\ms-playwright` on Windows), then `npm run e2e`. They use ports 3110/8110 and
+  their own database, so the dev servers can keep running.
+
 ## Production
 
 TBD in M9 (options and monthly cost presented before any spend).

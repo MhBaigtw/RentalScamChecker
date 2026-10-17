@@ -21,7 +21,7 @@ CLAUDE.md requires us to keep apart:
 | `photo_reuse_internal` hashes and match rule | Deterministic (pHash/dHash, thresholds) | M5 | ED-025 |
 | `photo_reuse_web` | External paid API (TinEye), OFF; never called | M5 | ED-025 |
 | `contact_reuse` and the check graph | Deterministic (HMAC equality, SQL graph queries, rules) | M6 | ED-026 |
-| Risk scoring | Deterministic rules (v1); a trained model only with enough real labels | M7 / v2 | ED-005 |
+| Risk scoring | **Deterministic rule** (v1: points per severity x weight, thresholds, one-step graph cap; hand-chosen, not trained or tuned); a trained model only with enough real labels | M7 / v2 | ED-005, ED-027 |
 
 Nothing in this project is a model we trained (yet).
 

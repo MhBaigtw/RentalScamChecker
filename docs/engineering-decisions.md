@@ -701,3 +701,98 @@ should fill in "Code locations" once the code exists.
   ~100 ms for a 300-check cluster on this machine, of which ~90 ms is the P-009 Docker transport
   stall); the cluster number stops at "at least 500"; links made before a threshold change keep
   their old distances (they are stored, so they can be filtered or rebuilt).
+
+## ED-027: Scoring v1: versioned points config, and risk that cannot cascade through the graph  (2026-10-18, M7)
+- Problem / decision: turn signal results into one level (Low risk / Some risk signals / High
+  risk signals / Incomplete), explainably and versioned (SPEC 5); and, as Humayun required, make
+  sure risk does not cascade through the check graph: contact_reuse may only escalate to high
+  when a linked check is high for reasons independent of contact_reuse, and propagation is one
+  hop only.
+- **Rule (deterministic, `scoring/rules.py`, config `scoring/v1.toml`)**: points per signal =
+  severity points (none 0, low 1, medium 2, high 4) x weight (1.0; address_sanity 0.5); sum >= 4
+  -> high, >= 1 -> some, else low. A single strong signal is enough for "High risk signals"; two
+  medium ones together also reach it. address_sanity is halved because geocoding misses are often
+  typos or new buildings, so on its own it reaches "some" at most. These numbers are hand-chosen,
+  not tuned: there are no labelled outcomes yet. They are never shown to users (SPEC 10); the API
+  returns only the level, a summary and the names of contributing signals.
+- **SPEC's "critical combination" example** (photo reused at another address AND deposit before
+  viewing) is not a separate rule: under these points it already reaches high (2 + 2 or more).
+  A combination list that can never change the outcome would be dead code; add one in v2 if
+  weights change so that it matters.
+- **Versioning**: `checks.scoring_version` stores "v1". The config is validated when the worker
+  starts (bad config -> the worker refuses to start). Changing any value means a new file
+  (v2.toml), never editing v1. Reports are not re-scored when the config changes.
+- **Incomplete**: a signal errored or never finished, and the level is not already "high". A
+  "high" stands, since missing evidence could only have added risk. Listed as exceptions
+  (`optional_signals = ["photo_reuse_web"]`, the paid, off-by-default search) rather than as a
+  list of key signals, so a new signal counts by default.
+- **The graph constraint** (why and how):
+  - The problem: anyone can submit a listing with any phone number. If a check's level could
+    rise because a linked check is high, and that linked check's level could itself come from
+    its own links, one fake listing could spread "high" through a landlord's whole network
+    (A -> B -> C -> ...), and an attacker could poison an honest landlord's number.
+  - Two levels per check: `risk_level` (shown) and `independent_risk_level`, computed with every
+    result marked `evidence.depends_on_other_checks` left out. contact_reuse results are always
+    marked; photo_reuse_internal results are marked only when the photos are concerning solely
+    because they match a same-address check that is high risk (matches at other addresses are
+    this listing's own evidence).
+  - Signals that look at a linked check read only its `independent_risk_level`, never
+    `risk_level`. contact_reuse (v2) gives "high" only for a link to an independently high
+    check, and its evidence lists that check's own signals (`linked_high_risk`).
+    photo_reuse_internal (v3) does the same for same-address matches. Because the independent
+    level never includes anything read from other checks, a link can carry risk exactly one hop.
+  - Graph-dependent results may raise a check at most `graph.max_steps_up = 1` level above its
+    independent level. So a link alone gives "some" at most (the poisoning case: a fake high-risk
+    listing using a real landlord's number makes the landlord's next clean listing "some", not
+    "high"); together with the check's own "some" evidence it can reach "high" (the legitimate
+    case).
+  - The report says so: the summary adds that part of the level comes from linked listings and
+    can raise it by one step at most, and contact_reuse's explanation says the link "is about
+    another listing that used the same contact, not proof about this one".
+- **Bug found and fixed on the way**: photo_reuse_internal v2 explained same-address matches to a
+  high-risk check as "for a different address" and counted them as different-address checks. v3
+  separates the two cases.
+- **Tested** (`tests/test_scoring.py`, real contact_reuse + real aggregator): (a) poisoning: a
+  fake high-risk listing with a landlord's phone -> the landlord's next clean listing "some",
+  independent "low", earlier ones unchanged; (b) no chain A -> B -> C, through a phone link and
+  through a same-address photo link; (c) the legitimate case: B independently high from its own
+  photo reuse -> C's contact_reuse "high" naming B's photo signal; C "some" alone, "high" with
+  its own medium signal. Five mutations of the mechanism (read `risk_level` instead, drop the
+  cap, count graph results in the independent level, photo reads the wrong level, photo never
+  sets the flag) each make a test fail.
+- Trade-offs: a real ring whose listings each look clean on their own stays at "some" from links
+  alone; the cap trades that sensitivity for resistance to poisoning. Results are frozen at
+  scoring time: an earlier report doesn't rise when a later linked check turns out high (the
+  "Linked listings" section, computed when the report is read, still shows the link).
+
+## ED-028: Web UI: browser calls the API directly (CORS), client-side polling, calm design, Playwright e2e  (2026-10-18, M7)
+- Problem / decision: a submission form with photo previews, a progress view and a report page,
+  mobile-first and accessible, plus an end-to-end browser test.
+- **The browser calls the API directly** (`NEXT_PUBLIC_API_URL`), with CORS allowing only the web
+  origins in `WEB_ORIGINS` (GET and POST, `Content-Type` only, no credentials). Considered: a
+  Next.js route handler proxying `/api/*` (no CORS needed). Rejected because the API would then
+  see every request coming from the Next.js server, which breaks the per-IP rate limits planned
+  in M8, and every 10 MB photo upload would pass through two servers.
+- **Pages**: `/` (server component shell + `CheckForm` client component) and `/checks/[id]`
+  (params awaited inside Suspense, as Cache Components requires, then the `CheckView` client
+  component). CheckView polls `GET /checks/{id}` every second (every 3 s after 30 s) and shows
+  `ProgressView` until the check is complete, then `Report`. The API now returns
+  `expected_signals` so the progress view can list the checks still running.
+- **Design**: one light theme, slate neutrals with a teal accent; levels in tinted panels
+  (emerald / amber / soft orange / slate), never red, with the level always written in words.
+  Each signal card says what was checked, what was found, the next step, and the evidence behind
+  a "Show the evidence" disclosure (formatted labels, no raw JSON). The `frontend-design` skill
+  Humayun suggested was not available in this session; the design follows the brief directly.
+- **Accessibility**: every input has a label (hints and errors linked with
+  `aria-describedby`); an error summary with links takes focus after a failed submit; skip link;
+  visible focus rings; progress announced with `aria-live` and a `progressbar`; level and
+  findings are text, not colour only. Keyboard-only use is covered by one e2e test. Not done: an
+  automated contrast/axe audit and a screen-reader walkthrough (M9 security/quality pass or M10).
+- **End-to-end test**: Playwright (Chromium) runs the real web app (`next build` + `next start`),
+  API, worker and Postgres: `apps/api/tests/e2e_server.py` prepares a separate database
+  (`<dev db>_e2e_test`), starts a worker and the API on port 8110, the web app on 3110. Only
+  signals without network calls are enabled (price, photos, contact), so CI never calls
+  Anthropic, Nominatim or TinEye. A new CI job runs it.
+- Trade-offs: polling instead of server-sent events (simple, at most one request a second per open
+  report); no dark mode yet; the report page is client-rendered (the check id is in the URL and
+  the page is marked noindex).

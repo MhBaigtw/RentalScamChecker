@@ -101,9 +101,9 @@ Done when: three seeded checks sharing a phone number and a photo are linked in 
 
 ## M7 — Scoring and report UI (week 7)
 
-- [ ] Versioned scoring config; aggregator computes level + "Incomplete" handling; stores version.
-- [ ] Wording rules enforced (no "scam" verdicts) with a test that scans user-facing strings.
-- [ ] Web: submission form (photo upload with previews), progress view, report page with each
+- [x] Versioned scoring config; aggregator computes level + "Incomplete" handling; stores version.
+- [x] Wording rules enforced (no "scam" verdicts) with a test that scans user-facing strings.
+- [x] Web: submission form (photo upload with previews), progress view, report page with each
       signal's evidence and next step, mobile-friendly, accessible (labels, contrast, keyboard).
 
 Done when: full journey works in the browser end to end; Playwright e2e test covers submit → report.
@@ -144,6 +144,8 @@ outside Claude Code.
       with ORB keypoints + RANSAC inlier count (OpenCV); re-run eval/photo_dupes.py and report
       recall per crop type.
 - [ ] Verify the TinEye request format against the live API before enabling it.
+- [ ] Cluster traversal as one WITH RECURSIVE query inside Postgres; compare against the current
+      Python BFS at 50k checks.
 
 ---
 
@@ -236,3 +238,16 @@ outside Claude Code.
   Docker Desktop transport stall on >8 kB parameters (P-009). Live API + worker: three checks sharing
   (905) 555-0142 and one photo list each other with linked_by [phone, photo], cluster 3, GET 38-39 ms;
   same-photo same-address pair is informational; no ids leaked.
+
+- 2026-10-18, M7 (branch m7-scoring-and-ui). First: contact_reuse added to Humayun's .env; dev check data
+  wiped (20 checks with photos, contacts, 65 results, 8 photo links, 85 jobs, 32 llm_cache rows, 30 photo
+  files; reference_rents, geocode_cache, llm_calls kept); pre-commit ruff + mypy now cover eval/ (a broken
+  eval file was caught by both hooks); backlog: WITH RECURSIVE cluster traversal. Scoring v1 (ED-027):
+  versioned TOML config, points -> level, incomplete unless high, independent_risk_level (migration 0011)
+  and a one-step cap for results that depend on other checks; contact_reuse v2 and photo_reuse_internal v3
+  read only linked checks' independent level (no cascade; tests for poisoning, A->B->C, legitimate case;
+  5/5 mutations caught). Wording test over every API string literal and every web source file. Web
+  (ED-028): form with photo previews, progress view, report with evidence and next steps; browser calls
+  the API with CORS. 402 API tests (139 integration), 17 vitest, 4 Playwright e2e (52 s) pass locally;
+  ruff, mypy strict, eslint, tsc clean. Screenshots (390 px and 1280 px) in docs/screenshots. Dev-stack
+  run with all six signals: report in 9.8 s, "High risk signals" from text, price and address.

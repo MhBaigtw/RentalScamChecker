@@ -36,7 +36,7 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M6): 355 total, all passing locally on 2026-10-17 (Windows); 132 of them are
+Current tests (M7): 402 total, all passing locally on 2026-10-18 (Windows); 139 of them are
 `integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
 but inherit the module's marker). **No test touches the network**: Nominatim is replaced by
 `tests/nominatim_fake.py` (an httpx `MockTransport` with hand-written `jsonv2`-shaped responses),
@@ -69,6 +69,9 @@ backoffs and the worker process.
 | `test_photos_unit.py` (20) | unit + real model | signed-hash Hamming; resized copy hashes close, different room far; match-rule boundaries; address normalisation (incl. `#B` units, found a regex bug); **real int8 CLIP**: 512-d normalised vectors, mirrored copy ≥ 0.95, different room < 0.95; missing model is a clear error |
 | `test_photo_signals.py` (15) | integration + real model | first check stores fingerprints; **resized copy at another address → high (hash)**; mirrored copy → medium (embedding only); same-address repost → information; **similar but different rooms don't match**; re-run reuses fingerprints; web search OFF → skipped with no call; fake web matches → medium, per-check limit, cache; cap → skipped; **TinEye request shape and parsing via a mock transport (never the real API)**; startup checks (model missing, TinEye key missing, TinEye budget); **end to end via API + worker: cropped/resized re-submission flagged high**; explanation grammar |
 | `test_check_graph.py` (16) | integration + real model | **M6 Done-when via API + worker: three checks sharing a phone (typed two ways in the form, only in the listing text of the third) and a photo (resized / re-encoded) list each other in `related`, cluster size 3, no other check's id anywhere in the reports**; **two checks sharing only a photo at the same address → photo signal none, contact signal skipped, related shows it as same address**; `related` null until complete; cluster follows phone→photo→email chains; cap; related limit vs total; photo links stored both ways and idempotently; **embedding-only matches link too**; deleting a check removes its links; contact_reuse: never seen / same address only → none, same city → low, other city → medium, prior high-risk → high, no contacts → skipped, text-sourced contacts link like form fields |
+| `test_scoring.py` (32) | unit + integration | levels from points; address_sanity alone never high; skipped adds nothing; errors -> incomplete unless high; optional signal errors ignored; **graph-dependent high alone capped at some; lifts own some to high; independent level ignores graph results**; contributing names only; config validation (10 invalid configs); **(a) poisoning: fake high-risk listing with a landlord's phone -> landlord's next clean listing some, not high; (b) no chain A -> B -> C via phone, nor via a same-address photo link; (c) linked check with its own photo-reuse evidence -> contact_reuse high, naming it** (real contact_reuse + real aggregator) |
+| `test_wording.py` (11) | unit | every string literal in the API package (docstrings excluded) free of verdict phrasing and of "scam" as a word; the checker catches known verdicts and allows the brand name; labels are exactly the four levels; every summary clean |
+| `test_cors.py` (2) | unit | web origin allowed for POST, no credentials; other origins get no allow-origin header |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
@@ -91,6 +94,12 @@ it failed each time, then passed again once the code was restored:
 - (M6) photo branch removed from the related-checks query, or from the cluster search; other-city
   rule removed from contact_reuse; `public_ref` returning the raw id: each makes
   `test_check_graph.py` fail (4 of 4 caught).
+- (M7) contact_reuse reads `risk_level` instead of `independent_risk_level`; scorer without the
+  one-step cap; independent level counting graph-dependent results; photo signal treating an
+  independent "some" as high; photo signal never setting `depends_on_other_checks`: each
+  makes `test_scoring.py` or `test_photo_signals.py` fail (5 of 5). Without the cap, the
+  poisoning and legitimate-case tests both fail on their own. A verdict inserted into a
+  signal explanation makes `test_wording.py` fail.
 - (M4) daily-cap advisory lock removed: `test_daily_cap_holds_under_concurrency` fails (3 of 3 runs).
 - (M3) worker waits for the helper thread instead of timing out (`helper.join()`): `test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running` fails.
 
@@ -112,16 +121,40 @@ far, but they depend on the machine not stalling for more than the margin.
 | Unit tests | `npm test` (vitest) |
 | Build | `npm run build` |
 
-Current tests (M0): 4 vitest tests for `fetchHealth` (ok, degraded with error shape, degraded
-with unexpected body, unreachable).
+| End-to-end | `npm run e2e` (Playwright, Chromium; starts everything itself, see below) |
+| Screenshots | `npm run e2e:screenshots` (writes docs/screenshots/, on request only) |
 
-Not covered yet: the rendered page itself (checked by hand in M0 by loading it with the API up,
-the DB down, and the API down). Playwright end-to-end tests arrive in M7.
+Unit tests (M7): 17 vitest tests: `fetchHealth` (4); `lib/api.ts` (5: created, field errors with
+per-photo errors folded, unreachable, not found incl. invalid id, ok); `lib/signals.ts` (6:
+finding labels, evidence formatting, nested rows, per-signal labels, level names, a title for
+every signal); wording (2: the checker itself, and no verdict phrasing in any page, component or
+library file).
+
+End-to-end (M7, ED-028), 4 tests in `e2e/journey.spec.ts`, against the real web app (`next build`
++ `next start` on 3110), API (8110), worker and Postgres. `apps/api/tests/e2e_server.py` creates
+and empties a separate database (`<dev db>_e2e_test`), loads the CMHC rents and enables only
+signals without network calls (price, both photo signals, contact; TinEye off):
+1. **submit -> progress -> report**: a $900 2-bedroom in Toronto with 2 photos and a phone ->
+   "High risk signals" based on the price; cards for price, photos and contact; price card shows
+   "Strong risk signal", a next step, and evidence ($900) after "Show the evidence"; web search
+   "Not checked"; no verdict wording in the page text;
+2. a second listing reusing the photo and phone in another city -> photo card strong signal and a
+   "Linked listings" section naming the first (same phone, same photo);
+3. submitting an empty form -> error summary takes focus and links to the photo field;
+4. keyboard: skip link first, then the fields in order.
+Run time on the dev machine: 52 s including the Next.js build. Also in CI (job `e2e`).
+
+Not covered: other browsers (Chromium only), an automated accessibility audit (axe) and contrast
+measurement, the text and address signals in the browser (they need network; checked once by
+hand against the dev stack in M7).
 
 ## Pre-commit
 
-`pre-commit install` (from the API venv) runs hygiene hooks, ruff and eslint on commit. Type
-checks and tests run in CI, not in the hook.
+`pre-commit install` (from the API venv) runs hygiene hooks, ruff (check + format) on `apps/api/`
+and `eval/`, mypy (the same two runs as CI, through `scripts/precommit-mypy.sh` and the API venv,
+when any Python file there changes; ~9 s warm, ~40 s cold) and eslint on commit. Tests run in CI,
+not in the hook. Until M7 `eval/` was only linted in CI, which let a broken string literal reach a
+commit in M6.
 
 ## CI
 

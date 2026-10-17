@@ -38,6 +38,10 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["rentalscamchecker*"]
 
+[tool.setuptools.package-data]
+# Versioned scoring configs (M7, ED-027).
+"rentalscamchecker.scoring" = ["*.toml"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

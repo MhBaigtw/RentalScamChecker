@@ -2,6 +2,7 @@
 
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
@@ -26,6 +27,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="RentalScamChecker API", version="0.1.0")
     app.middleware("http")(request_id_middleware)
+    # Only the web app's origin(s), only the methods it uses, no cookies (no accounts yet).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in settings.web_origins.split(",") if o.strip()],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+        expose_headers=["X-Request-ID"],
+    )
     install_error_handlers(app)
     app.include_router(build_checks_router(session_factory, storage, settings))
     app.include_router(build_metrics_router(session_factory, settings))
