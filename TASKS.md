@@ -144,6 +144,8 @@ outside Claude Code.
       with ORB keypoints + RANSAC inlier count (OpenCV); re-run eval/photo_dupes.py and report
       recall per crop type.
 - [ ] Verify the TinEye request format against the live API before enabling it.
+- [ ] Cluster traversal as one WITH RECURSIVE query inside Postgres; compare against the current
+      Python BFS at 50k checks.
 
 ---
 

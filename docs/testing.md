@@ -120,8 +120,11 @@ the DB down, and the API down). Playwright end-to-end tests arrive in M7.
 
 ## Pre-commit
 
-`pre-commit install` (from the API venv) runs hygiene hooks, ruff and eslint on commit. Type
-checks and tests run in CI, not in the hook.
+`pre-commit install` (from the API venv) runs hygiene hooks, ruff (check + format) on `apps/api/`
+and `eval/`, mypy (the same two runs as CI, through `scripts/precommit-mypy.sh` and the API venv,
+when any Python file there changes; ~9 s warm, ~40 s cold) and eslint on commit. Tests run in CI,
+not in the hook. Until M7 `eval/` was only linted in CI, which let a broken string literal reach a
+commit in M6.
 
 ## CI
 
