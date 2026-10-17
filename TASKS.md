@@ -92,9 +92,9 @@ eval report exists with real measured numbers.
 
 ## M6 — Contact graph (week 6)
 
-- [ ] `contact_reuse` signal: links via HMAC hashes; evidence = count of other checks, distinct
+- [x] `contact_reuse` signal: links via HMAC hashes; evidence = count of other checks, distinct
       cities/addresses, prior risk levels.
-- [ ] Graph queries for "related checks" (photos OR contacts), cluster size; indexes justified
+- [x] Graph queries for "related checks" (photos OR contacts), cluster size; indexes justified
       with EXPLAIN output recorded in docs/database-design.md.
 
 Done when: three seeded checks sharing a phone number and a photo are linked in each other's reports.
@@ -223,3 +223,16 @@ outside Claude Code.
   -> high: photo 2 pHash 0 / dHash 0 / cos 0.975, photo 3 pHash 10 / dHash 9 / cos 0.962 (photo 1, the 80% crop,
   not matched); photo_reuse_internal took 4.7 s cold (first check in the worker) and 0.6 s warm for 3 photos.
   photo_reuse_web: OFF, skipped; tested with fakes and a mock transport only; no TinEye account or call.
+
+- 2026-10-17, M6 (branch m6-contact-graph). Backlog section added (crop-robust matching, TinEye
+  verification); production model fetch + checksum noted in deployment.md and the M9 checklist; photo
+  signals added to Humayun's .env. Migration 0010 (photo_links both ways, contact hash index) round-trips.
+  photo_reuse_internal v2 stores each match (full M5 rule incl. embedding-only) in photo_links and shows
+  other checks by public_ref (fixes P-010: M5 evidence exposed check ids). contact_reuse (deterministic)
+  and graph.py (related checks, BFS cluster size with contacts as nodes, cap 500); GET /checks/{id} gains
+  `related`, computed at read time. 355 tests pass (132 integration); ruff, mypy strict (+ linux),
+  alembic check clean. EXPLAIN at 50,000 synthetic checks: graph queries 0.24-3.3 ms in Postgres with the
+  indexes, 16-35 ms (seq scans) without; ~100 ms cluster search for a 300-check hotline is mostly a
+  Docker Desktop transport stall on >8 kB parameters (P-009). Live API + worker: three checks sharing
+  (905) 555-0142 and one photo list each other with linked_by [phone, photo], cluster 3, GET 38-39 ms;
+  same-photo same-address pair is informational; no ids leaked.

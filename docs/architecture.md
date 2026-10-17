@@ -27,7 +27,7 @@ browser ──HTTP──> apps/web (Next.js, :3100) ──server-side fetch─�
 | `storage.py` | `PhotoStorage` protocol + `LocalDiskStorage` (M1). S3-compatible implementation at deploy time. |
 | `checks/validation.py` | Pure validation of the listing fields; collects every field error (M1). |
 | `checks/service.py` | `create_check()` (storage writes + one DB transaction), `load_check()` (M1). |
-| `checks/api.py` | `POST /checks`, `GET /checks/{id}` and their response models (M1). |
+| `checks/api.py` | `POST /checks`, `GET /checks/{id}` and their response models (M1); the report's `related` section from the graph (M6). |
 | `__main__.py` | `python -m rentalscamchecker` runs uvicorn on `API_PORT`. |
 | `worker.py` | `python -m rentalscamchecker.worker`: builds the worker, installs SIGTERM/SIGINT/SIGBREAK handlers, runs it (M2). |
 | `jobs/queue.py` | Queue repository in plain SQL: `enqueue`, `claim`, `complete`, `fail`, `reap_expired_leases`, `run_now`, `backoff_seconds` (M2, ED-017). |
@@ -45,6 +45,8 @@ browser ──HTTP──> apps/web (Next.js, :3100) ──server-side fetch─�
 | `signals/photo_reuse_internal.py` | Fingerprints a check's photos and matches them against earlier checks (M5). |
 | `signals/photo_reuse_web.py` | Paid reverse image search behind `TINEYE_ENABLED` (OFF) (M5). |
 | `addresses.py` | Street-address normalisation for "same address" (M5). |
+| `graph.py` | The check graph: `related_checks`, `cluster_size` (BFS over checks and contacts), `store_photo_links`, `public_ref` (M6, ED-026). |
+| `signals/contact_reuse.py` | Same phone/email (HMAC) in other checks; severity by address, city, prior risk (M6). |
 | `metrics.py` | `GET /internal/metrics`: jobs by status, worker heartbeats (M3, ED-023). |
 | `geocoding.py` | `NominatimGeocoder`: identified User-Agent, DB cache, global 1 req/s limit via a locked `rate_limits` row (M3). External API (OpenStreetMap data). |
 

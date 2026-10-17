@@ -642,3 +642,62 @@ should fill in "Code locations" once the code exists.
   model_files, web_search), `signals/photo_reuse_internal.py`, `signals/photo_reuse_web.py`,
   `addresses.py`, migration `0009_photo_signals`, `eval/photo_dupes.py`,
   `eval/hash_search_bench.py`, `eval/fixtures/photos/`
+
+## ED-026: Check graph: photo links stored when matched, contacts as their own nodes, read-time related checks  (2026-10-17, M6)
+- Problem / decision: link checks that share a photo (under the M5 photo rule, not exact hashes
+  only) or a phone number / email (form fields and listing text), show those links in every
+  linked check's report, and size the connected group, all in Postgres (SPEC 6, no graph
+  database); and add the `contact_reuse` signal.
+- **Photo edges are stored, contact edges are not.** `photo_reuse_internal` already compares each
+  new photo with every stored one (hash scan + HNSW, ED-025), so it writes each match to
+  `photo_links` (migration 0010) as it finds it. Recomputing image matches at read time would cost
+  a full hash scan per photo per report view. Contacts need no new table: `check_contacts` already
+  is the check-to-contact edge list, and an index on `(hmac_hash, check_id)` makes "who else used
+  this contact" an index-only scan.
+- **`photo_links` holds both directions** (A→B and B→A) with `check_id`/`other_check_id` copied
+  from the photos. "Links of check X" is then one index range scan on `(check_id, other_check_id)`
+  with no join to `check_photos` and no `OR` over two columns. Cost: two rows per match, and the
+  writer must insert both (one function, `graph.store_photo_links`, idempotent with
+  `ON CONFLICT DO NOTHING` because jobs can run twice, ED-017).
+- **Why every pair can be linked without races**: each check's photos are fingerprinted and
+  committed before that check searches. Of two checks processed at the same time, the one that
+  searches second therefore sees the other's committed fingerprints, so a matching pair is always
+  found by at least one of them.
+- **Pairwise links, not photo clusters.** SPEC 6 sketched "photo (by perceptual hash cluster)" as
+  a node. The M5 rule isn't transitive (A≈B and B≈C doesn't give A≈C), so clustering photos would
+  invent matches; pairwise links keep each edge a measured fact with its distances and cosine.
+- **Related checks are computed when a report is read**, not frozen into a signal result. That is
+  what makes the first of three linked checks show the later two (the M6 "Done when"): its signals
+  ran before the others existed. Shown only once a check is `complete` (its own photo links are
+  written while its signals run). It is context: it doesn't change the risk level; the photo and
+  contact signals, frozen at their run time, carry the severity.
+- **Cluster size: breadth-first search in Python, two queries per level, capped at 500 checks.**
+  Checks and contacts are both nodes (photos link checks directly). Each contact hash is expanded
+  once (`seen_hashes`). The first version joined `check_contacts` to itself per level, which
+  re-expanded a shared contact from every check holding it: for 300 checks sharing one phone the
+  second level built ~90,000 joined rows. Considered a recursive CTE (one round trip); chose the
+  loop because the cap, the "seen" sets and each query's plan are easy to read and test.
+- **Other checks are shown by `public_ref`, never by id.** `GET /checks/{id}` returns the listing
+  text and address, so an id is effectively a read key. M5's `photo_reuse_internal` evidence put
+  the matched check's id in the report (`matched_check_id`): anyone seeing a report could read the
+  other user's listing. Fixed here: `public_ref` is the first 10 hex characters of
+  SHA-256("check-ref:" + id), one-way (ids are random UUIDs), stable across reports. Bumped
+  `photo_reuse_internal` to version 2 (evidence field renamed `matched_check`). P-010.
+- **`contact_reuse` severity** (a starting point for M7 scoring, not tuned on data): linked to a
+  check rated high risk → high; used for a different address in another city → medium; other
+  addresses in the same city only → low (landlords and property managers with several units do
+  this legitimately); only the same address (a repost) or never seen → none; no contacts →
+  skipped. `risk_level` is only set by scoring in M7, so until then "high" cannot fire and prior
+  levels show as `not_scored`.
+- **Evidence (measured, `eval/graph_explain.py`, 50,000 synthetic checks, 67,300 contacts,
+  115,618 photo-link rows)**: with the indexes, every graph query runs in 0.24 to 3.3 ms inside
+  Postgres; without `ix_check_contacts_hmac_hash_check_id` the contact lookup becomes a
+  sequential scan (35 ms); without `ix_photo_links_check_id_other_check_id` the related-checks
+  query also does (16 ms). Plans in docs/database-design.md.
+- Not linked (yet): addresses. SPEC 6 lists "check-at-address" edges; the same address is used
+  here only to label links as reposts. Linking different listings at one geocoded address is
+  possible later with the M3 geocode fields.
+- Trade-offs: report reads do a little graph work each time (median 3 to 13 ms for typical checks,
+  ~100 ms for a 300-check cluster on this machine, of which ~90 ms is the P-009 Docker transport
+  stall); the cluster number stops at "at least 500"; links made before a threshold change keep
+  their old distances (they are stored, so they can be filtered or rebuilt).
