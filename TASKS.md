@@ -77,14 +77,14 @@ covered by a test that simulates an API failure.
 
 ## M5 — Photo signals (weeks 5–6)
 
-- [ ] Perceptual hashing (imagehash: pHash, dHash) stored as 64-bit ints; Hamming-distance search
+- [x] Perceptual hashing (imagehash: pHash, dHash) stored as 64-bit ints; Hamming-distance search
       (Postgres `bit_count` on XOR, or an in-process BK-tree if faster; measure and record).
-- [ ] Image embeddings from a pretrained model on CPU (choose and justify in engineering-decisions);
+- [x] Image embeddings from a pretrained model on CPU (choose and justify in engineering-decisions);
       pgvector index; similarity threshold calibrated on the fixture set.
-- [ ] `photo_reuse_internal` signal combining both, with evidence (matched check ids, distance,
+- [x] `photo_reuse_internal` signal combining both, with evidence (matched check ids, distance,
       differing city/address).
-- [ ] `photo_reuse_web` TinEye adapter behind feature flag (OFF), spend cap, caching; tests with fakes.
-- [ ] `eval/photo_dupes.py`: fixture set of transformed images + non-duplicates; report
+- [x] `photo_reuse_web` TinEye adapter behind feature flag (OFF), spend cap, caching; tests with fakes.
+- [x] `eval/photo_dupes.py`: fixture set of transformed images + non-duplicates; report
       precision/recall and per-image latency measured on Humayun's machine.
 
 Done when: re-submitting a listing with cropped/resized versions of earlier photos is flagged;
@@ -199,3 +199,17 @@ outside Claude Code.
   (check completes with method keyword_rules, severity capped at medium). Eval harness reports written to
   eval/private/reports/ (keyword, Haiku, Opus). docs/labeling-guide.md added; the harness validates the label file
   by line number.
+- 2026-10-17, M5 (branch m5-photo-signals). Disk 37 GB free; measured before install: 69 MB wheels (~204 MB
+  unpacked) + model files (int8 89 MB chosen; fp32 352 MB downloaded only to compare). CLIP ViT-B/32 (MIT) as int8
+  ONNX on onnxruntime (no PyTorch); fp32 vs int8 same recall at precision 1.0. Fixtures: 24 CC0/public-domain
+  Wikimedia Commons interiors (4.35 MB, manifest with source + licence per image; 3 candidates dropped after visual
+  review), 12 edits each. eval/photo_dupes.py: 288 duplicate / 6,900 non-duplicate pairs (525 hard negatives);
+  chosen rule single hash <= 10 OR both <= 18 OR cosine >= 0.95 -> precision 1.000, recall 0.774, 0 hard-negative
+  hits (curve points in eval/reports/photo_dupes.md); crops removing >= 30% mostly missed. Latency per image on this
+  machine (AMD, 12 logical CPUs): hashes 6.3 ms median, int8 embedding 100.5 ms median (p95 125 ms), model load
+  0.6 s. Hash search: Postgres bit_count scan 7 ms @10k / 47 ms @100k vs BK-tree 24 / 257 ms -> SQL. Migration 0009
+  round-trips; ruff, mypy strict (+ linux) clean; pytest 339/339 (116 integration). Live API + worker: listing A
+  (3 photos, Oakville) -> photo_reuse_internal none; listing B (centre crop 80%, 50% resize, crop+resize; Mississauga)
+  -> high: photo 2 pHash 0 / dHash 0 / cos 0.975, photo 3 pHash 10 / dHash 9 / cos 0.962 (photo 1, the 80% crop,
+  not matched); photo_reuse_internal took 4.7 s cold (first check in the worker) and 0.6 s warm for 3 photos.
+  photo_reuse_web: OFF, skipped; tested with fakes and a mock transport only; no TinEye account or call.

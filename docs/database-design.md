@@ -14,6 +14,7 @@ fails if the models and the migrations have drifted apart.
 | `0003_contact_source` | M2 | `check_contacts.source`; unique `(check_id, kind)` → `(check_id, kind, hmac_hash)`; data step redacts contacts in existing `listing_text` and hashes them in (ED-016). Hand-written (autogenerate misses CHECK constraints). |
 | `0005_reference_rents_geocoding` | M3 | `reference_rents` re-created by geography level and rent basis (never loaded before; the upgrade refuses if it has rows); `geocode_cache`; `rate_limits`. Hand-written. Round trip and `alembic check` verified. |
 | `0006_check_unit_type` | M3 | `checks.unit_type` (`whole_unit` default, `room`, `basement`) with a CHECK. Hand-written. Round trip verified. |
+| `0009_photo_signals` | M5 | `CREATE EXTENSION vector`; `check_photos.embedding vector(512)` + HNSW cosine index; `web_image_searches`, `web_image_search_cache`. Round trip and `alembic check` verified. |
 | `0008_llm_calls` | M4 | `llm_calls` (+ index on `called_at`) for the daily cap and spend auditing. Round trip verified. |
 | `0007_worker_heartbeats` | M3 | `worker_heartbeats` for `/internal/metrics`. Round trip verified. |
 | `0004_job_queue_indexes` | M2 | Partial indexes `ix_jobs_claimable`, `ix_jobs_running_lease` (below). Round trip and `alembic check` verified. |
@@ -32,7 +33,7 @@ fails if the models and the migrations have drifted apart.
 - **Child rows** (`check_photos`, `check_contacts`, `signal_results`) reference `checks.id` with
   `ON DELETE CASCADE`: deleting a check removes everything about it in one statement.
 
-## Tables (after M4)
+## Tables (after M5)
 
 ### `checks`: one submitted listing and, later, its report
 | Column | Type | Notes |
@@ -61,8 +62,11 @@ fails if the models and the migrations have drifted apart.
 | phash, dhash | bigint null | 64-bit perceptual hashes (M5). Postgres has no unsigned 64-bit type; M5 will map unsigned → signed two's complement. XOR + `bit_count` still works on the signed value. |
 | width, height | int | of the re-encoded image |
 
-Not yet: `embedding vector(N)`. The dimension N depends on which embedding model M5 picks, so
-the column is added in M5's migration rather than guessed now (ED-011).
+| embedding | vector(512) null | CLIP ViT-B/32 image embedding, L2-normalised (M5, ED-025); NULL until photo_reuse_internal has run |
+
+Indexes (M5): `ix_check_photos_embedding_hnsw` (HNSW, `vector_cosine_ops`) for nearest-neighbour
+search. No index for the hashes: a full `bit_count((phash # :q)::bit(64))` scan measured 7 ms at
+10k rows and 47 ms at 100k rows, faster than a BK-tree (eval/reports/hash_search_bench.md).
 
 ### `check_contacts`
 | Column | Type | Notes |
@@ -126,6 +130,11 @@ OpenStreetMap data (ODbL). No expiry yet.
 `jobs_done_total`, `jobs_failed_total`, `jobs_timed_out_total`, `abandoned_threads_alive`. Upserted by
 each worker process every 5 s; read by `GET /internal/metrics`.
 
+### `web_image_searches`, `web_image_search_cache` (M5, ED-025)
+Paid reverse image search (TinEye, OFF): one row per call (`provider`, `image_sha256`, `outcome`,
+`result_count`, `error`, `called_at` indexed) for the daily cap; cache keyed by
+`(image_sha256, provider)` with normalised matches. Empty until the feature is turned on.
+
 ### `rate_limits` (M3, ED-022)
 `name` primary key → `last_request_at`. One row (`nominatim`); locked for the duration of each
 geocoding request to enforce 1 request/s across processes.
@@ -151,7 +160,7 @@ check" lookups (`GET /checks/{id}`), so there are no separate `check_id` indexes
 Deliberately **not** added yet, because the query that needs them doesn't exist yet. Each will be
 added in the milestone that writes the query, with `EXPLAIN` output recorded here:
 - `check_contacts (hmac_hash)`: "other checks with this contact" (M6).
-- `check_photos`: perceptual-hash and vector indexes (M5).
+
 
 ### Job queue indexes (M2)
 

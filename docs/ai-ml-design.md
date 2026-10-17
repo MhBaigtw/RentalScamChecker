@@ -17,7 +17,9 @@ CLAUDE.md requires us to keep apart:
 | `text_red_flags`, AI path | **External AI API**: Anthropic's Claude via the Messages API | M4 | ED-024 |
 | `text_red_flags`, fallback | Deterministic rule (regular expressions) | M4 | ED-024 |
 | Severity of `text_red_flags` | Deterministic rule over the flags found | M4 | ED-024 |
-| `photo_reuse_internal` embeddings | Pretrained model we run (to be chosen) | M5 | - |
+| `photo_reuse_internal` embeddings | **Pretrained model we run**: OpenAI CLIP ViT-B/32 image encoder (MIT), int8 ONNX, onnxruntime on CPU | M5 | ED-025 |
+| `photo_reuse_internal` hashes and match rule | Deterministic (pHash/dHash, thresholds) | M5 | ED-025 |
+| `photo_reuse_web` | External paid API (TinEye), OFF; never called | M5 | ED-025 |
 | Risk scoring | Deterministic rules (v1); a trained model only with enough real labels | M7 / v2 | ED-005 |
 
 Nothing in this project is a model we trained (yet).
@@ -119,3 +121,18 @@ urgency_pressure 2 / 1.00 / 1.00; too_good_to_be_true_language 1 / 1.00 / 1.00.
 labels; it shows the pipeline works, not how accurate either model is on real listings.**
 
 Decision: default `claude-haiku-5-5` (ED-024). Re-run on the real labeled set before relying on it.
+
+## photo_reuse_internal (M5)
+
+- **Hashes (deterministic)**: pHash and dHash, 64 bits each (`photos/hashing.py`).
+- **Embeddings (pretrained model we run)**: CLIP ViT-B/32 image encoder, int8 ONNX, 512-d,
+  L2-normalised (`photos/embeddings.py`), ~100 ms per photo on the dev CPU. We did not train or
+  fine-tune it.
+- **Match rule (deterministic)**: single hash ≤ 10, OR both hashes ≤ 18, OR cosine ≥ 0.95
+  (`photos/matching.py`).
+- **Evaluation**: `eval/photo_dupes.py` on 24 CC0/public-domain interiors × 12 synthetic edits
+  (288 duplicate pairs, 6,900 non-duplicate pairs incl. 525 hard negatives). At the chosen rule:
+  precision 1.000, recall 0.774, 0 hard-negative hits. Crops removing ≥30% of the image are mostly
+  missed (recall 0.04-0.17). Full curves and per-edit recall: `eval/reports/photo_dupes.md`.
+  **These are synthetic edits of public images, not real re-posted listings**; no real reuse data
+  exists yet.

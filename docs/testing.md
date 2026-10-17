@@ -36,11 +36,12 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M4): 304 total, all passing locally on 2026-10-16 (Windows); 101 of them are
+Current tests (M5): 339 total, all passing locally on 2026-10-17 (Windows); 116 of them are
 `integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
 but inherit the module's marker). **No test touches the network**: Nominatim is replaced by
 `tests/nominatim_fake.py` (an httpx `MockTransport` with hand-written `jsonv2`-shaped responses),
-CMHC data by `tests/fixtures/rms_synthetic.csv`, whose values are synthetic and labelled so in
+the photo tests use the committed CC0/public-domain fixture images and the real int8 CLIP model
+(fetched in CI, cached), CMHC data by `tests/fixtures/rms_synthetic.csv`, whose values are synthetic and labelled so in
 every row, and the Anthropic API by `tests/anthropic_fake.py` (canned responses, the SDK's real
 exception types). The one test that reads the committed real CMHC dataset is a regression test
 (`test_typical_milton_two_bedroom_is_not_flagged`). The full suite takes about 45 s, mostly real waits for leases,
@@ -65,6 +66,8 @@ backoffs and the worker process.
 | `test_text_flags_llm.py` (17) | integration | request uses structured output + explicit effort + server-side refusal fallback (plain endpoint for models without it); cache hit makes no call; cache is per model; **daily cap stops calls, and holds with 8 concurrent callers against a cap of 3**; long input not sent; timeout / connection / 429 / 500 / refusal / max_tokens / malformed output each map to a reason, logged in `llm_calls`, never cached |
 | `test_text_flags_pipeline.py` (8) | unit + integration | API refuses to start without `ANTHROPIC_API_KEY`; Anthropic worst case must fit the job timeout; **full journey on the AI path (redacted text sent, no phone number)**; **full journey with a simulated API failure (timeout, 503) → keyword fallback, check completes** |
 | `test_eval_text_flags.py` (10) | unit | eval harness: per-flag counts, precision/recall, n/a when never predicted, report states set size and the synthetic warning; **label-file validation reports every problem by line number** (bad JSON, not an object, missing/unknown keys, duplicate id, unknown or repeated flags, wrong types, empty file); cost estimate from list prices |
+| `test_photos_unit.py` (20) | unit + real model | signed-hash Hamming; resized copy hashes close, different room far; match-rule boundaries; address normalisation (incl. `#B` units, found a regex bug); **real int8 CLIP**: 512-d normalised vectors, mirrored copy ≥ 0.95, different room < 0.95; missing model is a clear error |
+| `test_photo_signals.py` (15) | integration + real model | first check stores fingerprints; **resized copy at another address → high (hash)**; mirrored copy → medium (embedding only); same-address repost → information; **similar but different rooms don't match**; re-run reuses fingerprints; web search OFF → skipped with no call; fake web matches → medium, per-check limit, cache; cap → skipped; **TinEye request shape and parsing via a mock transport (never the real API)**; startup checks (model missing, TinEye key missing, TinEye budget); **end to end via API + worker: cropped/resized re-submission flagged high**; explanation grammar |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
@@ -83,6 +86,7 @@ it failed each time, then passed again once the code was restored:
 - (pre-M3) upsert without the "only replace an error" condition: `test_error_never_replaces_a_result` fails.
 - (pre-M3) no "check complete → write nothing" guard: `test_check_timeout_finalizes_without_the_missing_signal` fails.
 - (M3) geocoder rate-limit sleep removed: `test_requests_are_spaced_by_the_minimum_interval_across_instances` fails.
+- (M5) cosine threshold loosened to 0.80: `test_similar_but_different_rooms_do_not_match` fails; `same_address` always False: `test_same_address_repost_is_information_not_a_warning` fails.
 - (M4) daily-cap advisory lock removed: `test_daily_cap_holds_under_concurrency` fails (3 of 3 runs).
 - (M3) worker waits for the helper thread instead of timing out (`helper.join()`): `test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running` fails.
 
