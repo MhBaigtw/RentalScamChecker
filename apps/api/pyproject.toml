@@ -20,6 +20,7 @@ dependencies = [
     "pillow~=12.3.0",
     "phonenumbers~=9.0.41",
     "httpx~=0.28.1",
+    "anthropic~=1.15.0",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ of failing jobs later.
 
 from collections.abc import Callable
 
+import anthropic
 from sqlalchemy.orm import Session, sessionmaker
 
 from rentalscamchecker.config import Settings
@@ -16,6 +17,8 @@ from rentalscamchecker.signals.address_sanity import AddressSanitySignal
 from rentalscamchecker.signals.base import Signal
 from rentalscamchecker.signals.price_vs_market import PriceVsMarketSignal
 from rentalscamchecker.signals.stub import StubSignal
+from rentalscamchecker.signals.text_red_flags import TextRedFlagsSignal
+from rentalscamchecker.text_flags.llm import ClaudeFlagExtractor
 
 SignalFactory = Callable[[Settings, sessionmaker[Session]], Signal]
 
@@ -55,11 +58,39 @@ def _address_sanity(settings: Settings, sessions: sessionmaker[Session]) -> Sign
     return AddressSanitySignal(geocoder)
 
 
+def _text_red_flags(settings: Settings, sessions: sessionmaker[Session]) -> Signal:
+    key = (
+        settings.anthropic_api_key.get_secret_value().strip() if settings.anthropic_api_key else ""
+    )
+    if not key:
+        raise ValueError(
+            "ENABLED_SIGNALS includes text_red_flags, but ANTHROPIC_API_KEY is not set. Set it, "
+            "or remove text_red_flags from ENABLED_SIGNALS."
+        )
+    client = anthropic.Anthropic(
+        api_key=key,
+        timeout=settings.anthropic_timeout_seconds,
+        max_retries=settings.anthropic_max_retries,
+    )
+    extractor = ClaudeFlagExtractor(
+        sessions,
+        client,
+        model=settings.anthropic_model,
+        effort=settings.anthropic_effort,
+        max_tokens=settings.anthropic_max_tokens,
+        daily_cap=settings.llm_daily_call_cap,
+        max_input_chars=settings.llm_max_input_chars,
+        cap_lock_wait_seconds=settings.llm_cap_lock_wait_seconds,
+    )
+    return TextRedFlagsSignal(extractor)
+
+
 # name -> factory. Each real signal is added here in its milestone.
 AVAILABLE: dict[str, SignalFactory] = {
     "stub": _stub,
     "price_vs_market": _price_vs_market,
     "address_sanity": _address_sanity,
+    "text_red_flags": _text_red_flags,
 }
 
 
