@@ -84,3 +84,37 @@ Format: symptom, root cause, fix, lesson.
   city comparison, which had the same bug.
 - Lesson: a test whose expected value is "nothing found" can pass for the wrong reason; check
   that a "None" result is None for the reason you think.
+
+## P-009: A 300-check cluster took 100 ms although its queries ran in ~1 ms each  (2026-10-17, M6)
+- Symptom: in `eval/graph_explain.py`, `cluster_size` for a contact shared by 300 checks took
+  ~100 ms, while EXPLAIN ANALYZE showed 1.2 ms and 1.1 ms for its two slow queries.
+- First cause found (real, fixed): the original cluster search joined `check_contacts` to itself
+  for the whole frontier, re-expanding the shared phone once per check (~90,000 joined rows). Now
+  contacts are nodes and each hash is expanded once (ED-026). That fixed the query cost; the
+  100 ms remained.
+- Root cause of the rest: client-to-server transport, not Postgres. Narrowed down step by step,
+  timing each query from Python: SQLAlchemy vs raw psycopg (same), prepared vs not and
+  `plan_cache_mode = force_custom_plan` (same, so not a generic plan), binary vs text parameters
+  (same), the ids written into the SQL instead of a parameter (3 ms), and finally
+  `SELECT length(:p)`, which touches no table: 1.6 ms with a 7.4 kB parameter, 44 ms with 8.5 kB
+  or more. Plain (unparameterised) query text of 20 kB stayed fast. Inside the container the same
+  query took 3.0 to 3.5 ms (Unix socket) and 3.8 to 4.2 ms (TCP). So: a parameterised request over
+  ~8 kB stalls ~40 ms through Docker Desktop's Windows port forwarding. 40 ms is the classic
+  Nagle / delayed-ACK interaction; that it is exactly this was not proven.
+- Fix: none in the code (it's the local dev setup). The benchmark reports the parameter-size table
+  so the numbers aren't misread, and docs/database-design.md separates database time from it.
+- Lesson: when a query's EXPLAIN time and its wall time disagree by 40x, time the transport with a
+  query that does no work before tuning the query.
+
+## P-010: Photo evidence exposed other checks' ids  (2026-10-17, found in M6, introduced in M5)
+- Symptom: none visible; found while designing the M6 "related checks" output. M5's
+  `photo_reuse_internal` evidence included `matched_check_id`, the full id of the earlier check.
+- Root cause: `GET /checks/{id}` returns the listing text and address to anyone with the id (no
+  accounts until M8), so the id works as a read key. Putting it in someone else's report let them
+  read the earlier submitter's listing.
+- Fix: reports show `public_ref` (one-way SHA-256 tag) instead (ED-026); `photo_reuse_internal`
+  version 2. A test asserts no other check's id appears anywhere in the linked reports
+  (`test_three_checks_sharing_a_phone_and_a_photo_are_linked_in_each_others_reports`), and a
+  mutation (returning the raw id as the ref) makes it fail. Results stored by version 1 in the dev
+  database still contain ids; they are dev data only.
+- Lesson: an id that grants access is a secret. Check every place one is shown to a different user.

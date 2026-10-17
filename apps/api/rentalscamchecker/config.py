@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     # --- Signals and orchestration (M2) ---
     # Comma-separated signal names to run for every new check (see signals/registry.py).
     enabled_signals: str = (
-        "price_vs_market,address_sanity,text_red_flags,photo_reuse_internal,photo_reuse_web"
+        "price_vs_market,address_sanity,text_red_flags,photo_reuse_internal,photo_reuse_web,"
+        "contact_reuse"
     )
     stub_signal_sleep_seconds: float = 1.0
     # The aggregator runs when every signal has a result, or after this long, whichever is first.

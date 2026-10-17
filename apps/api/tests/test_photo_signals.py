@@ -16,6 +16,7 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session, sessionmaker
 
 from rentalscamchecker.config import get_settings
+from rentalscamchecker.graph import public_ref
 from rentalscamchecker.images import process_photo
 from rentalscamchecker.jobs.worker import Worker, WorkerConfig
 from rentalscamchecker.main import create_app
@@ -153,7 +154,7 @@ def test_resized_copy_at_a_different_address_is_high(
     assert result.severity == "high"
     (match,) = result.evidence["matches"]
     assert match["photo"] == 2
-    assert match["matched_check_id"] == str(first.check_id)
+    assert match["matched_check"] == public_ref(first.check_id)
     assert match["matched_city"] == "Oakville"
     assert match["same_address"] is False
     assert match["match_type"] == "hash"
@@ -407,7 +408,9 @@ def test_resubmitted_cropped_and_resized_photos_are_flagged_end_to_end(
     assert s2["severity"] == "high"
     matched = {m["photo"] for m in s2["evidence"]["matches"]}
     assert matched >= {2, 3}
-    assert all(m["matched_check_id"] == first["id"] for m in s2["evidence"]["matches"])
+    assert all(
+        m["matched_check"] == public_ref(uuid.UUID(first["id"])) for m in s2["evidence"]["matches"]
+    )
 
 
 def test_explanation_grammar_for_several_photos(

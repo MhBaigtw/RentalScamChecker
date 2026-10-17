@@ -36,7 +36,7 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M5): 339 total, all passing locally on 2026-10-17 (Windows); 116 of them are
+Current tests (M6): 355 total, all passing locally on 2026-10-17 (Windows); 132 of them are
 `integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
 but inherit the module's marker). **No test touches the network**: Nominatim is replaced by
 `tests/nominatim_fake.py` (an httpx `MockTransport` with hand-written `jsonv2`-shaped responses),
@@ -68,6 +68,7 @@ backoffs and the worker process.
 | `test_eval_text_flags.py` (10) | unit | eval harness: per-flag counts, precision/recall, n/a when never predicted, report states set size and the synthetic warning; **label-file validation reports every problem by line number** (bad JSON, not an object, missing/unknown keys, duplicate id, unknown or repeated flags, wrong types, empty file); cost estimate from list prices |
 | `test_photos_unit.py` (20) | unit + real model | signed-hash Hamming; resized copy hashes close, different room far; match-rule boundaries; address normalisation (incl. `#B` units, found a regex bug); **real int8 CLIP**: 512-d normalised vectors, mirrored copy ≥ 0.95, different room < 0.95; missing model is a clear error |
 | `test_photo_signals.py` (15) | integration + real model | first check stores fingerprints; **resized copy at another address → high (hash)**; mirrored copy → medium (embedding only); same-address repost → information; **similar but different rooms don't match**; re-run reuses fingerprints; web search OFF → skipped with no call; fake web matches → medium, per-check limit, cache; cap → skipped; **TinEye request shape and parsing via a mock transport (never the real API)**; startup checks (model missing, TinEye key missing, TinEye budget); **end to end via API + worker: cropped/resized re-submission flagged high**; explanation grammar |
+| `test_check_graph.py` (16) | integration + real model | **M6 Done-when via API + worker: three checks sharing a phone (typed two ways in the form, only in the listing text of the third) and a photo (resized / re-encoded) list each other in `related`, cluster size 3, no other check's id anywhere in the reports**; **two checks sharing only a photo at the same address → photo signal none, contact signal skipped, related shows it as same address**; `related` null until complete; cluster follows phone→photo→email chains; cap; related limit vs total; photo links stored both ways and idempotently; **embedding-only matches link too**; deleting a check removes its links; contact_reuse: never seen / same address only → none, same city → low, other city → medium, prior high-risk → high, no contacts → skipped, text-sourced contacts link like form fields |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
@@ -87,6 +88,9 @@ it failed each time, then passed again once the code was restored:
 - (pre-M3) no "check complete → write nothing" guard: `test_check_timeout_finalizes_without_the_missing_signal` fails.
 - (M3) geocoder rate-limit sleep removed: `test_requests_are_spaced_by_the_minimum_interval_across_instances` fails.
 - (M5) cosine threshold loosened to 0.80: `test_similar_but_different_rooms_do_not_match` fails; `same_address` always False: `test_same_address_repost_is_information_not_a_warning` fails.
+- (M6) photo branch removed from the related-checks query, or from the cluster search; other-city
+  rule removed from contact_reuse; `public_ref` returning the raw id: each makes
+  `test_check_graph.py` fail (4 of 4 caught).
 - (M4) daily-cap advisory lock removed: `test_daily_cap_holds_under_concurrency` fails (3 of 3 runs).
 - (M3) worker waits for the helper thread instead of timing out (`helper.join()`): `test_worker_keeps_processing_new_jobs_while_a_timed_out_one_is_still_running` fails.
 

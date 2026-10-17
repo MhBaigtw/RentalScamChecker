@@ -60,7 +60,8 @@ If the insert fails, the files just written are deleted.
               "address_text": "1430 Trafalgar Rd", "city": "Oakville"},
   "photos": [{"id": "…", "position": 0, "width": 640, "height": 480}],
   "contacts": [{"kind": "phone", "source": "field"}, {"kind": "phone", "source": "text"}],
-  "signals": []
+  "signals": [],
+  "related": null
 }
 ```
 
@@ -73,6 +74,26 @@ Clients poll this endpoint until `status` is `complete`.
 Contacts expose only kind and source (`field` or `text`): the hash is internal and the raw value
 no longer exists. `listing.listing_text` is the redacted text.
 Photo bytes aren't served yet (the report UI in M7 decides whether it needs them).
+
+`related` (M6, ED-026) is `null` until `status` is `complete`, then lists other checks linked to
+this one through a matching photo or a shared phone/email, computed when the report is read (so an
+earlier report also shows later checks):
+
+```json
+"related": {
+  "explanation": "2 other checks share a photo, phone number or email with this one (2 for a different address). Following those links further, 3 checks are connected, including this one.",
+  "next_step": "See the photo and contact results for what these links mean. Links at the same address are usually the same listing posted again.",
+  "total": 2, "at_different_address": 2,
+  "checks": [{"check": "3bf5864f09", "created_on": "2026-10-17", "city": "Brampton",
+              "risk_level": null, "linked_by": ["phone", "photo"], "same_address": false}],
+  "cluster_size": 3, "cluster_size_capped": false
+}
+```
+
+Other checks are identified only by `check` (a `public_ref`), never by id: an id would let the
+reader fetch that check. `checks` holds at most 50, newest first; `total` counts all.
+`at_different_address` is counted over the listed checks. `cluster_size` stops at 500
+(`cluster_size_capped: true` then means "at least").
 
 ## `GET /health`
 

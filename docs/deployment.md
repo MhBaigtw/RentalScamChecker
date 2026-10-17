@@ -50,6 +50,13 @@ start of M1; the container and its data were intact afterwards).
   `python -m rentalscamchecker.photos.model_files` (89 MB, SHA-256 checked) into `PHOTO_MODEL_DIR`
   (default `var/models`); the API and worker refuse to start without it. Workers also need the CPU
   for it (~0.1 s per photo).
+- **Production needs the same model fetch as CI.** The model file is not in git, so the production
+  image build (or a startup step before the API/worker processes) must run
+  `python -m rentalscamchecker.photos.model_files clip-vit-b32-int8`, exactly as
+  `.github/workflows/ci.yml` does. That command downloads the pinned revision and fails unless the
+  SHA-256 matches the value in `photos/model_files.py`; a mismatch must fail the build/deploy.
+  The API and worker themselves only check at startup that the file exists, not its checksum, so
+  the fetch step is where integrity is enforced. Tracked in the M9 checklist (TASKS.md).
 - `TINEYE_ENABLED` stays false until Humayun approves the spend and the adapter has been verified
   against the live API (ED-025).
 - `ANTHROPIC_API_KEY` is required while `text_red_flags` is enabled (M4). Calls are paid: keep
