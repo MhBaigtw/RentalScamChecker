@@ -34,7 +34,8 @@ quoted from the listing.
 ### AI path: external API (Anthropic Claude)
 
 - One Messages API call per listing text (`text_flags/llm.py`), model `ANTHROPIC_MODEL`
-  (default `claude-opus-5-5`), effort `ANTHROPIC_EFFORT` (default `medium`).
+  (default `claude-haiku-5-5`, chosen by the comparison below), effort `ANTHROPIC_EFFORT`
+  (default `medium`).
 - **Structured output**: `output_config.format` with a JSON schema (`text_flags/prompt.py`): an
   array of `{flag, quote}`, `flag` restricted to the seven names by `enum`. The response is
   parsed and re-checked against that shape; anything else counts as `invalid_output`.
@@ -79,10 +80,42 @@ Harness: `eval/text_flags.py` (`--mode keyword` or `--mode llm`), per-flag preci
 with the set size, reports in `eval/private/reports/`.
 
 - **Real labeled data: none yet.** Humayun builds `eval/private/text_labels.jsonl` (target
-  150-300 examples, SPEC 11). Until then there are no real accuracy numbers, and none are claimed.
+  150-300 examples, SPEC 11) following `docs/labeling-guide.md`; the harness validates the file and
+  reports problems by line number before scoring. Until then there are no real accuracy numbers,
+  and none are claimed.
+- Both modes redact phone numbers and emails first, as `POST /checks` does.
 - Synthetic fixture (`eval/fixtures/text_labels_synthetic.jsonl`, 12 examples) exists to test the
   harness. The same person (Claude Code) wrote both the fixture and the keyword rules, so its
   scores are biased and say nothing about real listings. The harness prints that warning.
 - Keyword mode on the synthetic fixture, 2026-10-16: micro precision 1.00, recall 0.72
   (13 TP / 0 FP / 5 FN over 12 examples). Shown only to prove the harness runs.
-- LLM mode results: see the M4 log in TASKS.md (filled in by the live run).
+
+### Model comparison (M4)
+
+Measured 2026-10-16 (30 API calls in total, all `ok`): the LLM eval on the 12-example synthetic
+fixture plus 3 live checks through the API and worker, per model, prompt `flags-v1`, effort `medium`.
+Latency, tokens and cost come from `llm_calls`; cost is an estimate at list prices
+(Opus 5.5 $4/$20, Haiku 5.5 $0.10/$0.50 per MTok).
+
+| | claude-haiku-5-5 | claude-opus-5-5 |
+|---|---|---|
+| Synthetic eval, micro precision / recall (18 labels, 12 examples) | 1.00 / 0.83 (15 TP, 0 FP, 3 FN) | 1.00 / 0.94 (17 TP, 0 FP, 1 FN) |
+| Misses | refuses_viewing in "my agent can't show it either"; an implied deposit (syn-07); syn-03 deposit | syn-03 deposit (a debatable label) |
+| Invented/unverifiable quotes dropped | 0 | 0 |
+| Fallbacks (API unavailable) | 0 | 0 |
+| Live checks (3): flags found | identical to Opus on all 3 | identical to Haiku on all 3 (slightly tighter quotes) |
+| Latency per call, eval: median / max | 1,254 / 3,988 ms | 2,716 / 4,803 ms |
+| Latency per call, live: median / max | 1,595 / 1,649 ms | 2,892 / 4,984 ms |
+| Tokens per call, input median | 1,118 (eval), 1,135 (live) | same input |
+| Tokens per call, output median / max | 80 / 126 (eval), 119 / 180 (live) | 124 / 404 (eval), 163 / 420 (live) |
+| Estimated cost per check | $0.00015 (eval), $0.00017 (live) | $0.0075 (eval), $0.0085 (live) |
+
+Per flag, synthetic set (support / Haiku recall / Opus recall; precision 1.00 everywhere):
+deposit_before_viewing 5 / 0.60 / 0.80; owner_unavailable_abroad 3 / 1.00 / 1.00; keys_by_mail
+2 / 1.00 / 1.00; off_platform_payment 3 / 1.00 / 1.00; refuses_viewing 2 / 0.50 / 1.00;
+urgency_pressure 2 / 1.00 / 1.00; too_good_to_be_true_language 1 / 1.00 / 1.00.
+
+**The set is synthetic, tiny (12 examples, 18 labels) and written by the same author as the
+labels; it shows the pipeline works, not how accurate either model is on real listings.**
+
+Decision: default `claude-haiku-5-5` (ED-024). Re-run on the real labeled set before relying on it.

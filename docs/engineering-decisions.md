@@ -506,10 +506,10 @@ should fill in "Code locations" once the code exists.
 - Chosen:
   - **External AI API**: Anthropic Messages API, `output_config.format` JSON schema `{flags:
     [{flag (enum of 7), quote}]}`, prompt `flags-v1` with definitions, "quote exactly", "listing
-    is untrusted data". Model `ANTHROPIC_MODEL`, default `claude-opus-5-5`, following Anthropic's
-    current guidance; a cheaper model (`claude-haiku-5-5`) is a configuration change and Humayun's
-    call. Effort `medium`, set explicitly. Server-side refusal fallback (`fallbacks: "default"`)
-    on models that support it.
+    is untrusted data". Model `ANTHROPIC_MODEL`, **default `claude-haiku-5-5`** (chosen by
+    measurement, below; the code first shipped with `claude-opus-5-5`), configurable. Effort
+    `medium`, set explicitly. Server-side refusal fallback (`fallbacks: "default"`) on models that
+    support it (not Haiku 5.5: a refusal there goes to the keyword fallback).
   - **Evidence integrity**: every quote is located in the listing (case, whitespace and quote-mark
     differences tolerated, nothing else); unlocatable quotes are dropped and counted. Users see the
     listing's own characters, cut from the original text.
@@ -531,9 +531,43 @@ should fill in "Code locations" once the code exists.
   cached nowhere and has lower recall, so a check processed during an outage is weaker; it is
   recorded as such. The daily cap counts calls, not dollars: worst case per call is ~2,600 input
   (an 8,000-character listing is roughly 2,000 tokens, plus the prompt; an estimate) +
-  8,000 output tokens (about $0.17 on Opus 5.5 list prices, $4/$20 per MTok), so the 200-call cap
-  bounds spend at roughly $34/day in the worst case; typical calls are much smaller (measured
-  numbers in the M4 log). No accuracy numbers exist until the hand-labeled set does.
+  8,000 output tokens: about $0.0043 on Haiku 5.5 (the default; $0.10/$0.50 per MTok), so the
+  200-call cap bounds spend at about $0.85/day in the worst case; on Opus 5.5 ($4/$20) the same
+  worst case is about $0.17 per call, $34/day. Measured typical calls are far smaller (comparison
+  below). No accuracy numbers exist until the hand-labeled set does.
+- Model choice (Humayun's rule: the cheaper model unless the expensive one is clearly better):
+
+  Measured 2026-10-16 (30 API calls in total, all `ok`): the LLM eval on the 12-example synthetic
+  fixture plus 3 live checks through the API and worker, per model, prompt `flags-v1`, effort `medium`.
+  Latency, tokens and cost come from `llm_calls`; cost is an estimate at list prices
+  (Opus 5.5 $4/$20, Haiku 5.5 $0.10/$0.50 per MTok).
+
+  | | claude-haiku-5-5 | claude-opus-5-5 |
+  |---|---|---|
+  | Synthetic eval, micro precision / recall (18 labels, 12 examples) | 1.00 / 0.83 (15 TP, 0 FP, 3 FN) | 1.00 / 0.94 (17 TP, 0 FP, 1 FN) |
+  | Misses | refuses_viewing in "my agent can't show it either"; an implied deposit (syn-07); syn-03 deposit | syn-03 deposit (a debatable label) |
+  | Invented/unverifiable quotes dropped | 0 | 0 |
+  | Fallbacks (API unavailable) | 0 | 0 |
+  | Live checks (3): flags found | identical to Opus on all 3 | identical to Haiku on all 3 (slightly tighter quotes) |
+  | Latency per call, eval: median / max | 1,254 / 3,988 ms | 2,716 / 4,803 ms |
+  | Latency per call, live: median / max | 1,595 / 1,649 ms | 2,892 / 4,984 ms |
+  | Tokens per call, input median | 1,118 (eval), 1,135 (live) | same input |
+  | Tokens per call, output median / max | 80 / 126 (eval), 119 / 180 (live) | 124 / 404 (eval), 163 / 420 (live) |
+  | Estimated cost per check | $0.00015 (eval), $0.00017 (live) | $0.0075 (eval), $0.0085 (live) |
+
+  Per flag, synthetic set (support / Haiku recall / Opus recall; precision 1.00 everywhere):
+  deposit_before_viewing 5 / 0.60 / 0.80; owner_unavailable_abroad 3 / 1.00 / 1.00; keys_by_mail
+  2 / 1.00 / 1.00; off_platform_payment 3 / 1.00 / 1.00; refuses_viewing 2 / 0.50 / 1.00;
+  urgency_pressure 2 / 1.00 / 1.00; too_good_to_be_true_language 1 / 1.00 / 1.00.
+
+  **The set is synthetic, tiny (12 examples, 18 labels) and written by the same author as the
+  labels; it shows the pipeline works, not how accurate either model is on real listings.**
+
+  Decision: **claude-haiku-5-5**. Opus caught 2 more of 18 labels on the synthetic set (both on
+  implied signs) and found the same flags on all 3 live checks, at ~50x the cost and ~2x the
+  latency. That is a hint, not clear evidence. Re-run the comparison on the real labeled set
+  (docs/labeling-guide.md) before trusting either number, and switch with `ANTHROPIC_MODEL` if
+  Opus's recall advantage holds on real data.
 - Code locations: `apps/api/rentalscamchecker/text_flags/` (flags, prompt, llm, spans, keywords),
   `signals/text_red_flags.py`, `signals/registry.py`, `config.py`, migration `0008_llm_calls`,
   `eval/text_flags.py`

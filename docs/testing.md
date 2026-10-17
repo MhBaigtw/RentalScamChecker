@@ -36,7 +36,7 @@ Verified on 2026-10-16: before a run, the server had only `rentalscamchecker`, w
 it, `rentalscamchecker_test` existed at revision `0003_contact_source` with 0 checks, and the dev
 database still had the same 13. A second run against the existing test database also passed.
 
-Current tests (M4): 300 total, all passing locally on 2026-10-16 (Windows); 101 of them are
+Current tests (M4): 304 total, all passing locally on 2026-10-16 (Windows); 101 of them are
 `integration` (real Postgres; the 3 timeout-config cases in `test_job_queue.py` don't need the DB
 but inherit the module's marker). **No test touches the network**: Nominatim is replaced by
 `tests/nominatim_fake.py` (an httpx `MockTransport` with hand-written `jsonv2`-shaped responses),
@@ -64,7 +64,7 @@ backoffs and the worker process.
 | `test_text_flags_unit.py` (38) | unit | quote location (case/whitespace/curly quotes tolerated; paraphrases and tiny quotes rejected); every keyword rule fires, ordinary listings (Interac e-Transfer, viewings offered, house rules) don't; severity rule; signal with a stub extractor: verified quotes, invented quote dropped and counted, duplicate flag once, **every API failure reason falls back to keyword rules, says so, capped at medium**; schema enumerates the 7 flags |
 | `test_text_flags_llm.py` (17) | integration | request uses structured output + explicit effort + server-side refusal fallback (plain endpoint for models without it); cache hit makes no call; cache is per model; **daily cap stops calls, and holds with 8 concurrent callers against a cap of 3**; long input not sent; timeout / connection / 429 / 500 / refusal / max_tokens / malformed output each map to a reason, logged in `llm_calls`, never cached |
 | `test_text_flags_pipeline.py` (8) | unit + integration | API refuses to start without `ANTHROPIC_API_KEY`; Anthropic worst case must fit the job timeout; **full journey on the AI path (redacted text sent, no phone number)**; **full journey with a simulated API failure (timeout, 503) → keyword fallback, check completes** |
-| `test_eval_text_flags.py` (6) | unit | eval harness: per-flag counts, precision/recall, n/a when never predicted, report states set size and the synthetic warning, unknown labels rejected |
+| `test_eval_text_flags.py` (10) | unit | eval harness: per-flag counts, precision/recall, n/a when never predicted, report states set size and the synthetic warning; **label-file validation reports every problem by line number** (bad JSON, not an object, missing/unknown keys, duplicate id, unknown or repeated flags, wrong types, empty file); cost estimate from list prices |
 | `test_db_guard.py` (6) | unit | test-DB name guard refuses non-`_test` names (incl. an injection attempt); default and overridden test-DB URL |
 | `test_images.py` (13) | unit | EXIF (incl. GPS) removed, EXIF orientation applied, PNG/WebP → JPEG, GIF / non-image / truncated / empty / >10 MB / >8000 px rejected, 49 MP decompression bomb (<100 KB file) rejected |
 | `test_storage.py` (8) | unit | put/get/delete, idempotent delete, path-traversal keys refused |
