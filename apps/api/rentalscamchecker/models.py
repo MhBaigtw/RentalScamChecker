@@ -154,6 +154,10 @@ class CheckContact(Base):
         UniqueConstraint(
             "check_id", "kind", "hmac_hash", name="uq_check_contacts_check_id_kind_hmac_hash"
         ),
+        # The contact graph (M6): "which checks used this contact?". check_id is included so the
+        # lookup is an index-only scan (EXPLAIN in docs/database-design.md). kind isn't needed:
+        # the HMAC input starts with the kind, so equal hashes always have equal kinds.
+        Index("ix_check_contacts_hmac_hash_check_id", "hmac_hash", "check_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -165,6 +169,41 @@ class CheckContact(Base):
     hmac_hash: Mapped[bytes] = mapped_column(LargeBinary)
 
     check: Mapped[Check] = relationship(back_populates="contacts")
+
+
+PHOTO_MATCH_TYPES = ("hash", "embedding")
+
+
+class PhotoLink(Base):
+    """A pair of photos from two different checks that match under the photo rule of M5
+    (photos/matching.py: perceptual hashes or CLIP embedding, ED-025). Written by
+    photo_reuse_internal; read by the check graph (graph.py, ED-026).
+
+    Stored in both directions (A->B and B->A), like an adjacency list, so "links of check X" is
+    one index range scan on check_id. check_id/other_check_id duplicate what the photo rows
+    already say, so graph queries don't need to join check_photos.
+    """
+
+    __tablename__ = "photo_links"
+    __table_args__ = (
+        CheckConstraint(_in("match_type", PHOTO_MATCH_TYPES), name="match_type"),
+        CheckConstraint("check_id <> other_check_id", name="different_checks"),
+        Index("ix_photo_links_check_id_other_check_id", "check_id", "other_check_id"),
+    )
+
+    photo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("check_photos.id", ondelete="CASCADE"), primary_key=True
+    )
+    other_photo_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("check_photos.id", ondelete="CASCADE"), primary_key=True
+    )
+    check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"))
+    other_check_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("checks.id", ondelete="CASCADE"))
+    match_type: Mapped[str] = mapped_column(Text)
+    phash_distance: Mapped[int | None] = mapped_column(SmallInteger)
+    dhash_distance: Mapped[int | None] = mapped_column(SmallInteger)
+    cosine: Mapped[float | None] = mapped_column(Double)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SignalResult(Base):

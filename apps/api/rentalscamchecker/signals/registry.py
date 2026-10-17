@@ -18,6 +18,7 @@ from rentalscamchecker.photos.model_files import MODELS, model_path
 from rentalscamchecker.photos.web_search import CachedCappedSearch, TinEyeClient
 from rentalscamchecker.signals.address_sanity import AddressSanitySignal
 from rentalscamchecker.signals.base import Signal
+from rentalscamchecker.signals.contact_reuse import ContactReuseSignal
 from rentalscamchecker.signals.photo_reuse_internal import PhotoReuseInternalSignal
 from rentalscamchecker.signals.photo_reuse_web import PhotoReuseWebSignal
 from rentalscamchecker.signals.price_vs_market import PriceVsMarketSignal
@@ -124,6 +125,10 @@ def _photo_reuse_web(settings: Settings, sessions: sessionmaker[Session]) -> Sig
     return PhotoReuseWebSignal(sessions, storage, search, settings.tineye_max_photos_per_check)
 
 
+def _contact_reuse(_settings: Settings, sessions: sessionmaker[Session]) -> Signal:
+    return ContactReuseSignal(sessions)
+
+
 # name -> factory. Each real signal is added here in its milestone.
 AVAILABLE: dict[str, SignalFactory] = {
     "stub": _stub,
@@ -132,6 +137,7 @@ AVAILABLE: dict[str, SignalFactory] = {
     "text_red_flags": _text_red_flags,
     "photo_reuse_internal": _photo_reuse_internal,
     "photo_reuse_web": _photo_reuse_web,
+    "contact_reuse": _contact_reuse,
 }
 
 

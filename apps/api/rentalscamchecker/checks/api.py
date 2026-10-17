@@ -1,7 +1,7 @@
 """HTTP endpoints: `POST /checks` and `GET /checks/{id}` (SPEC.md section 9)."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, UploadFile
@@ -16,6 +16,7 @@ from rentalscamchecker.checks.validation import (
 )
 from rentalscamchecker.config import Settings
 from rentalscamchecker.errors import ApiError, FieldError, validation_error
+from rentalscamchecker.graph import cluster_size, public_ref, related_checks
 from rentalscamchecker.images import MAX_PHOTO_BYTES, PhotoRejected, ProcessedPhoto, process_photo
 from rentalscamchecker.models import Check
 from rentalscamchecker.pipeline import enqueue_check_jobs
@@ -66,6 +67,33 @@ class SignalOut(BaseModel):
     finished_at: datetime | None
 
 
+class RelatedCheckOut(BaseModel):
+    # public_ref, never the id: an id would let the reader fetch someone else's listing.
+    check: str
+    created_on: date
+    city: str
+    risk_level: str | None
+    # "photo", "phone", "email".
+    linked_by: list[str]
+    same_address: bool
+
+
+class RelatedOut(BaseModel):
+    """Other checks linked to this one through a photo or a contact (the check graph, ED-026).
+    Computed when the report is read, so an earlier check's report also lists later checks.
+    Context only: it doesn't change the risk level (the photo and contact signals do that)."""
+
+    explanation: str
+    next_step: str
+    total: int
+    at_different_address: int
+    # Newest first, at most graph.RELATED_LIMIT.
+    checks: list[RelatedCheckOut]
+    # Checks reachable through any chain of links, including this one.
+    cluster_size: int
+    cluster_size_capped: bool
+
+
 class CheckOut(BaseModel):
     id: uuid.UUID
     status: str
@@ -76,6 +104,8 @@ class CheckOut(BaseModel):
     photos: list[PhotoOut]
     contacts: list[ContactOut]
     signals: list[SignalOut]
+    # None until the check is complete (photo links are stored while its signals run).
+    related: RelatedOut | None
 
 
 def build_router(
@@ -139,7 +169,8 @@ def build_router(
             check = load_check(session, check_id)
             if check is None:
                 raise ApiError(404, "not_found", "No check with this id.")
-            return _to_out(check)
+            related = _related(session, check) if check.status == "complete" else None
+            return _to_out(check, related)
 
     return router
 
@@ -159,7 +190,48 @@ def _process_photos(uploads: list[UploadFile], errors: list[FieldError]) -> list
     return processed
 
 
-def _to_out(check: Check) -> CheckOut:
+def _related(session: Session, check: Check) -> RelatedOut:
+    related, total = related_checks(session, check.id, check.address_text, check.city)
+    cluster = cluster_size(session, check.id)
+    # Counted over the listed checks; exact unless more than graph.RELATED_LIMIT are linked.
+    different = sum(1 for r in related if not r.same_address)
+    if total == 0:
+        explanation = (
+            "No other check submitted to this service shares a photo, phone number or email with "
+            "this one."
+        )
+    else:
+        group = f"at least {cluster.size}" if cluster.capped else str(cluster.size)
+        explanation = (
+            f"{total} other check{'s' if total != 1 else ''} share{'' if total != 1 else 's'} a "
+            f"photo, phone number or email with this one ({different} for a different address). "
+            f"Following those links further, {group} checks are connected, including this one."
+        )
+    return RelatedOut(
+        explanation=explanation,
+        next_step=(
+            "See the photo and contact results for what these links mean. Links at the same "
+            "address are usually the same listing posted again."
+        ),
+        total=total,
+        at_different_address=different,
+        checks=[
+            RelatedCheckOut(
+                check=public_ref(r.check_id),
+                created_on=r.created_at.date(),
+                city=r.city,
+                risk_level=r.risk_level,
+                linked_by=list(r.linked_by),
+                same_address=r.same_address,
+            )
+            for r in related
+        ],
+        cluster_size=cluster.size,
+        cluster_size_capped=cluster.capped,
+    )
+
+
+def _to_out(check: Check, related: RelatedOut | None) -> CheckOut:
     return CheckOut(
         id=check.id,
         status=check.status,
@@ -193,4 +265,5 @@ def _to_out(check: Check) -> CheckOut:
             )
             for s in check.signal_results
         ],
+        related=related,
     )

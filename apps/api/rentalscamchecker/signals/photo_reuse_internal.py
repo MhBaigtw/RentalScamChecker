@@ -6,15 +6,19 @@ on CPU) (SPEC 4, ED-025). For each photo of the check:
    and idempotent);
 2. find photos of OTHER checks that match under photos/matching.py: a Postgres bit_count scan for
    the hashes, the pgvector HNSW index for the embedding;
-3. keep matches whose check is for a different street address or city, or was rated high risk.
+3. store every match in photo_links (both directions) for the check graph (graph.py, ED-026);
+4. keep matches whose check is for a different street address or city, or was rated high risk.
    Matches at the same address are reported as information (a landlord re-posting their own
    listing is normal), not as a warning.
+
+Other checks appear in the evidence by `public_ref` only, never by id (graph.py explains why).
 
 Severity: a hash match at another address -> high; an embedding-only match (less certain) ->
 medium; otherwise none.
 """
 
 import io
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -25,6 +29,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from rentalscamchecker.addresses import same_address
+from rentalscamchecker.graph import NewPhotoLink, public_ref, store_photo_links
 from rentalscamchecker.models import CheckPhoto
 from rentalscamchecker.photos.embeddings import ClipEmbedder
 from rentalscamchecker.photos.hashing import hash_image
@@ -65,7 +70,9 @@ _EMBEDDING_SQL = text(
 @dataclass
 class Match:
     position: int
-    other_check_id: str
+    photo_id: uuid.UUID
+    other_photo_id: uuid.UUID
+    other_check_id: uuid.UUID
     other_city: str
     other_same_address: bool
     other_high_risk: bool
@@ -77,7 +84,8 @@ class Match:
 
 class PhotoReuseInternalSignal:
     name = "photo_reuse_internal"
-    version = "1"
+    # 2 (M6): matches are stored in photo_links; evidence shows public_ref instead of check ids.
+    version = "2"
 
     def __init__(
         self,
@@ -94,6 +102,8 @@ class PhotoReuseInternalSignal:
     def run(self, check: CheckInput, ctx: SignalContext) -> SignalResult:
         photos = self._fingerprint(check)
         matches = self._find_matches(check, photos)
+        with self._sessions.begin() as session:
+            store_photo_links(session, [_link(check, m) for m in matches])
         return _result(self, len(photos), matches)
 
     def _fingerprint(self, check: CheckInput) -> list[CheckPhoto]:
@@ -141,7 +151,7 @@ class PhotoReuseInternalSignal:
                 for r in rows:
                     found[(photo.position, r["photo_id"])] = _match(
                         check,
-                        photo.position,
+                        photo,
                         r,
                         "hash",
                         r["phash_distance"],
@@ -161,9 +171,7 @@ class PhotoReuseInternalSignal:
                         found[key].cosine = round(cosine, 4)
                         continue
                     if cosine >= self._t.cosine:  # no hash match for this pair: embedding only
-                        found[key] = _match(
-                            check, photo.position, r, "embedding", None, None, cosine
-                        )
+                        found[key] = _match(check, photo, r, "embedding", None, None, cosine)
         return sorted(
             found.values(), key=lambda m: (m.position, m.kind != "hash", m.other_check_id)
         )
@@ -176,7 +184,7 @@ def _load(data: bytes) -> Image.Image:
 
 def _match(
     check: CheckInput,
-    position: int,
+    photo: CheckPhoto,
     row: Any,
     kind: str,
     phash_distance: int | None,
@@ -184,8 +192,10 @@ def _match(
     cosine: float | None,
 ) -> Match:
     return Match(
-        position=position,
-        other_check_id=str(row["check_id"]),
+        position=photo.position,
+        photo_id=photo.id,
+        other_photo_id=row["photo_id"],
+        other_check_id=row["check_id"],
         other_city=row["city"],
         other_same_address=same_address(
             check.address_text, check.city, row["address_text"], row["city"]
@@ -195,6 +205,19 @@ def _match(
         phash_distance=phash_distance,
         dhash_distance=dhash_distance,
         cosine=round(cosine, 4) if cosine is not None else None,
+    )
+
+
+def _link(check: CheckInput, m: Match) -> NewPhotoLink:
+    return NewPhotoLink(
+        photo_id=m.photo_id,
+        check_id=check.check_id,
+        other_photo_id=m.other_photo_id,
+        other_check_id=m.other_check_id,
+        match_type=m.kind,
+        phash_distance=m.phash_distance,
+        dhash_distance=m.dhash_distance,
+        cosine=m.cosine,
     )
 
 
@@ -208,7 +231,7 @@ def _result(
         severity = "high"
     elif concerning:
         severity = "medium"
-    by_check: dict[str, set[int]] = defaultdict(set)
+    by_check: dict[uuid.UUID, set[int]] = defaultdict(set)
     for m in concerning:
         by_check[m.other_check_id].add(m.position)
     cities = sorted({m.other_city for m in concerning})
@@ -218,7 +241,7 @@ def _result(
         "matches": [
             {
                 "photo": m.position + 1,
-                "matched_check_id": m.other_check_id,
+                "matched_check": public_ref(m.other_check_id),
                 "matched_city": m.other_city,
                 "same_address": m.other_same_address,
                 "earlier_check_high_risk": m.other_high_risk,
