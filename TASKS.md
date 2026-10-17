@@ -123,6 +123,9 @@ Done when: outcome and dispute flows work end to end; rate limit returns 429 wit
 - [ ] Load test the worker (e.g. 200 queued checks) and record real throughput/latency numbers.
 - [ ] Choose hosting; present Humayun with options and monthly cost; deploy only after approval.
 - [ ] Production config, migrations on deploy, health checks, log shipping, error tracking.
+- [ ] Production build fetches the CLIP model file and verifies its SHA-256 (as CI does:
+      `python -m rentalscamchecker.photos.model_files clip-vit-b32-int8`); fail the deploy on a
+      mismatch. See docs/deployment.md.
 
 Done when: deployed URL works end to end; deployment steps reproducible from docs/deployment.md.
 
@@ -134,6 +137,13 @@ Done when: deployed URL works end to end; deployment steps reproducible from doc
 
 After M10, the build is handed back to Humayun for Phase B (tutor mode and mock interviews)
 outside Claude Code.
+
+## Backlog (not scheduled; do not start without Humayun's go-ahead)
+
+- [ ] Crop-robust photo matching: lower the embedding threshold to generate candidates, then verify
+      with ORB keypoints + RANSAC inlier count (OpenCV); re-run eval/photo_dupes.py and report
+      recall per crop type.
+- [ ] Verify the TinEye request format against the live API before enabling it.
 
 ---
 
