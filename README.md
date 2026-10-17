@@ -67,7 +67,8 @@ apps\api\.venv\Scripts\pre-commit.exe install
 ```
 
 Check it works: `curl http://127.0.0.1:8100/health` returns `{"status":"ok","database":"ok"}`, and
-http://localhost:3100 shows "All systems working". Stop Postgres (`docker compose stop`) and the
+http://localhost:3100 shows the check form; submit a listing and the report appears when the
+worker has run every signal. Screenshots: [docs/screenshots](docs/screenshots). Stop Postgres (`docker compose stop`) and the
 endpoint returns HTTP 503 with `{"error": {"code": "database_unavailable", ...}}`.
 
 On Windows, run Python only through the venv; bare `python` may not be 3.12 (on the dev machine

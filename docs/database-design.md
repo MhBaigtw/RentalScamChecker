@@ -14,6 +14,7 @@ fails if the models and the migrations have drifted apart.
 | `0003_contact_source` | M2 | `check_contacts.source`; unique `(check_id, kind)` → `(check_id, kind, hmac_hash)`; data step redacts contacts in existing `listing_text` and hashes them in (ED-016). Hand-written (autogenerate misses CHECK constraints). |
 | `0005_reference_rents_geocoding` | M3 | `reference_rents` re-created by geography level and rent basis (never loaded before; the upgrade refuses if it has rows); `geocode_cache`; `rate_limits`. Hand-written. Round trip and `alembic check` verified. |
 | `0006_check_unit_type` | M3 | `checks.unit_type` (`whole_unit` default, `room`, `basement`) with a CHECK. Hand-written. Round trip verified. |
+| `0011_scoring` | M7 | `checks.independent_risk_level` (+ CHECK), `checks.risk_details` (jsonb). Hand-written. Round trip and `alembic check` verified. |
 | `0010_check_graph` | M6 | `photo_links` (both directions, index `(check_id, other_check_id)`); `ix_check_contacts_hmac_hash_check_id`. Hand-written. Round trip and `alembic check` verified. |
 | `0009_photo_signals` | M5 | `CREATE EXTENSION vector`; `check_photos.embedding vector(512)` + HNSW cosine index; `web_image_searches`, `web_image_search_cache`. Round trip and `alembic check` verified. |
 | `0008_llm_calls` | M4 | `llm_calls` (+ index on `called_at`) for the daily cap and spend auditing. Round trip verified. |
@@ -34,7 +35,7 @@ fails if the models and the migrations have drifted apart.
 - **Child rows** (`check_photos`, `check_contacts`, `signal_results`) reference `checks.id` with
   `ON DELETE CASCADE`: deleting a check removes everything about it in one statement.
 
-## Tables (after M6)
+## Tables (after M7)
 
 ### `checks`: one submitted listing and, later, its report
 | Column | Type | Notes |
@@ -43,6 +44,8 @@ fails if the models and the migrations have drifted apart.
 | created_at | timestamptz | default `now()` |
 | status | text | `pending` \| `running` \| `complete`. Default `pending`. M2 drives the transitions. |
 | risk_level | text null | `low` \| `some` \| `high` \| `incomplete` (SPEC 5); set by the aggregator (M7) |
+| independent_risk_level | text null | same values; the level from the check's own evidence, without results that depend on other checks. The only level other checks read (ED-027) |
+| risk_details | jsonb null | contributing and missing signal names, `graph_capped` (no points or weights) |
 | scoring_version | text null | which scoring config produced `risk_level` |
 | user_id | uuid null | **no FK yet**: `users` arrives in M8 |
 | submitted_url | text null | stored as text, never fetched |

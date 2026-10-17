@@ -56,6 +56,7 @@ If the insert fails, the files just written are deleted.
 ```json
 {
   "id": "…", "status": "pending", "created_at": "…", "risk_level": null, "scoring_version": null,
+  "expected_signals": ["price_vs_market", "photo_reuse_internal", "contact_reuse"],
   "listing": {"submitted_url": null, "listing_text": "…", "rent_cents": 165000, "bedrooms": 2,
               "address_text": "1430 Trafalgar Rd", "city": "Oakville"},
   "photos": [{"id": "…", "position": 0, "width": 640, "height": 480}],
@@ -68,7 +69,25 @@ If the insert fails, the files just written are deleted.
 `status` moves `pending` (accepted, no signal started) → `running` (first signal job started) →
 `complete` (aggregator finished). `signals` lists each finished signal's result; a signal that
 failed permanently or didn't finish before the check timeout appears with `status: "error"`.
-`risk_level` is `"incomplete"` when any signal errored, otherwise `null` until scoring exists (M7).
+`expected_signals` (M7) lists the signals this check runs, for progress display.
+
+Once `status` is `complete` (M7, ED-027): `risk_level` is `low` / `some` / `high` /
+`incomplete`, `scoring_version` is `"v1"`, and `risk` explains it:
+
+```json
+"risk": {"level": "high", "label": "High risk signals",
+         "summary": "We found strong risk signals. Don't send money or personal documents until ...",
+         "contributing": ["photo_reuse_internal", "price_vs_market"], "missing": []}
+```
+
+`label` is one of the four allowed level names; `summary` adds a sentence when part of the level
+comes from linked listings. Points, weights and thresholds are never returned (SPEC 10).
+`risk` is `null` until the check is complete.
+
+Signal evidence may contain `depends_on_other_checks: true` (contact_reuse always;
+photo_reuse_internal when only a same-address link to a high-risk check made it concerning).
+contact_reuse v2 evidence: `linked_independent_levels` (replaces `prior_risk_levels`),
+`linked_high_risk` (`[{check, own_signals}]`), and `independent_risk_level` per linked check.
 Clients poll this endpoint until `status` is `complete`.
 
 Contacts expose only kind and source (`field` or `text`): the hash is internal and the raw value
@@ -94,6 +113,12 @@ Other checks are identified only by `check` (a `public_ref`), never by id: an id
 reader fetch that check. `checks` holds at most 50, newest first; `total` counts all.
 `at_different_address` is counted over the listed checks. `cluster_size` stops at 500
 (`cluster_size_capped: true` then means "at least").
+
+## CORS (M7, ED-028)
+
+The web app calls the API from the browser. Only the origins in `WEB_ORIGINS`
+(default `http://127.0.0.1:3100,http://localhost:3100`) are allowed, for GET and POST with a
+`Content-Type` header; no credentials. Other origins get no `Access-Control-Allow-Origin`.
 
 ## `GET /health`
 

@@ -45,6 +45,7 @@ browser ──HTTP──> apps/web (Next.js, :3100) ──server-side fetch─�
 | `signals/photo_reuse_internal.py` | Fingerprints a check's photos and matches them against earlier checks (M5). |
 | `signals/photo_reuse_web.py` | Paid reverse image search behind `TINEYE_ENABLED` (OFF) (M5). |
 | `addresses.py` | Street-address normalisation for "same address" (M5). |
+| `scoring/` | `v1.toml` (versioned config), `config.py` (load + validate), `rules.py` (points -> level, independent level, one-step graph cap, incomplete), `wording.py` (level labels and summaries) (M7, ED-027). |
 | `graph.py` | The check graph: `related_checks`, `cluster_size` (BFS over checks and contacts), `store_photo_links`, `public_ref` (M6, ED-026). |
 | `signals/contact_reuse.py` | Same phone/email (HMAC) in other checks; severity by address, city, prior risk (M6). |
 | `metrics.py` | `GET /internal/metrics`: jobs by status, worker heartbeats (M3, ED-023). |
@@ -70,10 +71,17 @@ the container is stopped, so a DB-down check takes about the full timeout (measu
 
 - `lib/health.ts`: `fetchHealth(apiUrl, fetchImpl)` maps every outcome to a typed status:
   `ok`, `degraded` (API answered with an error, e.g. 503) or `unreachable` (network error/timeout).
-- `app/page.tsx`: the home page. Next.js 16 with Cache Components builds `/` as a partial
-  prerender: the header is a static shell, and `<ApiHealth>` (inside `<Suspense>`) runs at request
-  time after `await connection()`. The browser never calls the API directly in M0, so no CORS is
-  needed yet (CORS lockdown is M8).
+- `app/page.tsx`: the home page: intro, a service-status line shown only when the API is down
+  (`<ServiceStatus>` inside `<Suspense>`, request time after `await connection()`), and
+  `components/CheckForm.tsx` (client: fields, `PhotoPicker` with previews, error summary, POST
+  /checks from the browser, then navigate to the check) (M7).
+- `app/checks/[id]/page.tsx`: awaits `params` inside Suspense (Cache Components) and renders
+  `components/CheckView.tsx` (client), which polls GET /checks/{id} and shows
+  `ProgressView` until complete, then `Report` (level panel, listing summary, one card per signal
+  with what was checked / found / next step / evidence, linked listings, safe-renting steps).
+- `lib/api.ts` (typed client, error-shape mapping), `lib/signals.ts` (titles, finding labels,
+  evidence formatting), `lib/wording.ts` (banned verdict phrasing, used by the tests).
+- The browser calls the API directly; the API allows the web origin by CORS (ED-028).
 
 ### Request flow: `POST /checks` (M1)
 

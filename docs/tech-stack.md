@@ -58,6 +58,7 @@ Known: Starlette warns that using `httpx` with its TestClient is deprecated in f
 | eslint + eslint-config-next | ^9 / 16.4.2 | Lint rules from Next.js |
 | vitest | ^5.0.5 | Fast unit tests for TS without a browser |
 | @types/node | ^24 | Matches the Node 24 runtime; vitest 5 requires ≥22 |
+| @playwright/test | 1.64.1 | Browser end-to-end test of the full journey (M7, ED-028); required by the M7 "Done when". Package 28 kB + playwright-core 13.7 MB; `playwright install chromium` downloads the browser (on the dev machine: 437 MB Chromium + 278 MB headless shell + 4 MB ffmpeg, measured 2026-10-17) |
 
 Known: `npm audit` reports 5 high-severity findings, all one chain inside
 `eslint-config-next` → `fast-glob` → `micromatch` → `braces` (ReDoS). Dev-only lint tooling,
